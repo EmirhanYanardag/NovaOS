@@ -6,6 +6,41 @@ export type ArenaVerdict =
   | "Insufficient behavioral agreement";
 
 export type ArenaConfidenceLabel = "High" | "Medium" | "Low";
+export type NovaArenaStance = "Pending" | "Bullish" | "Accumulate" | "Bearish";
+export type ArenaTimeframe = "24H" | "7D";
+
+export type ArenaWindow = {
+  arenaWindowId: string;
+  timeframe: ArenaTimeframe;
+  opensAt: string;
+  closesAt: string;
+  resolvesAt: string;
+  votingOpen: boolean;
+};
+
+export type ArenaProgress = {
+  progressPercent: number;
+  votingOpen: boolean;
+};
+
+export type ArenaTimeRemaining = {
+  timeRemainingLabel: string;
+};
+
+export type NovaArenaStanceInput = {
+  convictionScore?: number | null;
+  holderQuality?: number | null;
+  structuralSafety?: number | null;
+  marketIntegrity?: number | null;
+  insiderRisk?: number | null;
+  walletFlow?: string | null;
+  dataConfidence?: number | null;
+};
+
+export type NovaArenaStanceResult = {
+  stance: NovaArenaStance;
+  reason: string;
+};
 
 export type ArenaClusterSignals = {
   totalAnalyzedWallets?: number;
@@ -44,6 +79,11 @@ function clampScore(value: number) {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+function clampPercent(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
 function optionalScore(value?: number) {
   return typeof value === "number" && Number.isFinite(value)
     ? clampScore(value)
@@ -53,6 +93,184 @@ function optionalScore(value?: number) {
 function average(values: number[]) {
   if (values.length === 0) return 0;
   return values.reduce((total, value) => total + value, 0) / values.length;
+}
+
+function utcDateId(date: Date) {
+  return [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, "0"),
+    String(date.getUTCDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function addUtcDays(date: Date, days: number) {
+  const next = new Date(date.getTime());
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function startOfUtcDay(date: Date) {
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0)
+  );
+}
+
+function dailyCloseFor(date: Date) {
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 0, 0)
+  );
+}
+
+function weeklyCloseFor(date: Date) {
+  const day = date.getUTCDay();
+  const daysUntilSunday = (7 - day) % 7;
+  const closeDate = addUtcDays(date, daysUntilSunday);
+  return new Date(
+    Date.UTC(
+      closeDate.getUTCFullYear(),
+      closeDate.getUTCMonth(),
+      closeDate.getUTCDate(),
+      23,
+      59,
+      0,
+      0
+    )
+  );
+}
+
+function buildArenaWindow({
+  closesAt,
+  timeframe,
+  now,
+}: {
+  closesAt: Date;
+  timeframe: ArenaTimeframe;
+  now: Date;
+}): ArenaWindow {
+  const opensAt =
+    timeframe === "24H" ? startOfUtcDay(closesAt) : addUtcDays(startOfUtcDay(closesAt), -6);
+  const resolvesAt =
+    timeframe === "24H"
+      ? new Date(
+          Date.UTC(
+            closesAt.getUTCFullYear(),
+            closesAt.getUTCMonth(),
+            closesAt.getUTCDate() + 1,
+            23,
+            30,
+            0,
+            0
+          )
+        )
+      : new Date(
+          Date.UTC(
+            closesAt.getUTCFullYear(),
+            closesAt.getUTCMonth(),
+            closesAt.getUTCDate() + 7,
+            23,
+            30,
+            0,
+            0
+          )
+        );
+  const suffix = timeframe === "24H" ? utcDateId(closesAt) : `week-${utcDateId(closesAt)}`;
+
+  return {
+    arenaWindowId: `${timeframe}:${suffix}`,
+    timeframe,
+    opensAt: opensAt.toISOString(),
+    closesAt: closesAt.toISOString(),
+    resolvesAt: resolvesAt.toISOString(),
+    votingOpen: now.getTime() < closesAt.getTime(),
+  };
+}
+
+export function getDailyArenaWindow(now = new Date()): ArenaWindow {
+  const currentClose = dailyCloseFor(now);
+  const closesAt =
+    now.getTime() < currentClose.getTime() ? currentClose : dailyCloseFor(addUtcDays(now, 1));
+
+  return buildArenaWindow({ closesAt, timeframe: "24H", now });
+}
+
+export function getWeeklyArenaWindow(now = new Date()): ArenaWindow {
+  const currentClose = weeklyCloseFor(now);
+  const closesAt =
+    now.getTime() < currentClose.getTime() ? currentClose : weeklyCloseFor(addUtcDays(now, 7));
+
+  return buildArenaWindow({ closesAt, timeframe: "7D", now });
+}
+
+export function getArenaProgress(window: ArenaWindow, now = new Date()): ArenaProgress {
+  const opensAt = Date.parse(window.opensAt);
+  const closesAt = Date.parse(window.closesAt);
+  const current = now.getTime();
+  const total = closesAt - opensAt;
+  const elapsed = current - opensAt;
+
+  return {
+    progressPercent: total > 0 ? clampPercent((elapsed / total) * 100) : 100,
+    votingOpen: current < closesAt,
+  };
+}
+
+export function getTimeRemaining(window: ArenaWindow, now = new Date()): ArenaTimeRemaining {
+  const remainingMs = Date.parse(window.closesAt) - now.getTime();
+
+  if (remainingMs <= 0) {
+    return { timeRemainingLabel: "Voting closed" };
+  }
+
+  const totalMinutes = Math.ceil(remainingMs / 60000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) {
+    return { timeRemainingLabel: `${days}d ${hours}h remaining` };
+  }
+
+  if (hours > 0) {
+    return { timeRemainingLabel: `${hours}h ${minutes}m remaining` };
+  }
+
+  return { timeRemainingLabel: `${minutes}m remaining` };
+}
+
+export function deriveNovaArenaStance(
+  input: NovaArenaStanceInput
+): NovaArenaStanceResult {
+  if (
+    typeof input.convictionScore !== "number" ||
+    !Number.isFinite(input.convictionScore)
+  ) {
+    return {
+      stance: "Pending",
+      reason: "Conviction score is unavailable.",
+    };
+  }
+
+  const convictionScore = optionalScore(input.convictionScore) ?? 0;
+
+  if (convictionScore <= 47) {
+    return {
+      stance: "Bearish",
+      reason: "Bearish because the conviction score is below the bullish threshold.",
+    };
+  }
+
+  if (convictionScore <= 57) {
+    return {
+      stance: "Accumulate",
+      reason:
+        "Accumulate because the conviction score is mixed and not yet strong enough for Bullish.",
+    };
+  }
+
+  return {
+    stance: "Bullish",
+    reason: "Bullish because the conviction score is above the bullish threshold.",
+  };
 }
 
 function hasAccumulationTone(behaviorClass?: string) {

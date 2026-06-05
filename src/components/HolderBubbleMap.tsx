@@ -36,7 +36,6 @@ type HolderBubbleMapProps = {
   showLines: boolean;
   tokenLogoUrl?: string;
   tokenSymbol: string;
-  viewMode: "all" | "clusters" | "risk" | "whales";
 };
 
 type BubbleColor = {
@@ -62,7 +61,6 @@ const WIDTH = 1000;
 const HEIGHT = 680;
 const CENTER = { x: 500, y: 340 };
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
-const TOKEN_PROTECTED_RADIUS = 115;
 const MIN_X = 45;
 const MAX_X = 955;
 const MIN_Y = 45;
@@ -70,10 +68,10 @@ const MAX_Y = 635;
 
 const GROUP_COLORS: BubbleColor[] = [
   color("cyan", "34,211,238"),
-  color("violet", "167,139,250"),
-  color("amber", "245,158,11"),
-  color("rose", "251,113,133"),
+  color("amber", "249,115,22"),
+  color("violet", "168,85,247"),
   color("blue", "96,165,250"),
+  color("rose", "251,113,133"),
   color("emerald", "52,211,153"),
 ];
 
@@ -104,7 +102,6 @@ export default function HolderBubbleMap({
   showLines,
   tokenLogoUrl,
   tokenSymbol,
-  viewMode,
 }: HolderBubbleMapProps) {
   const [hoveredAddress, setHoveredAddress] = useState<string | null>(null);
   const { bubbles, links } = useMemo(
@@ -136,8 +133,8 @@ export default function HolderBubbleMap({
 
   return (
     <div className="relative h-[680px] w-full overflow-hidden rounded-2xl border border-white/10 bg-[#05070b] shadow-[0_28px_110px_rgba(0,0,0,0.34)]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(34,211,238,0.075),transparent_25%),radial-gradient(circle_at_50%_50%,rgba(255,255,255,0.026),transparent_54%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.009)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.009)_1px,transparent_1px)] bg-[size:72px_72px]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_18%,rgba(34,211,238,0.065),transparent_32%),radial-gradient(circle_at_78%_62%,rgba(249,115,22,0.055),transparent_30%),radial-gradient(circle_at_48%_86%,rgba(148,163,184,0.035),transparent_34%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.007)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.007)_1px,transparent_1px)] bg-[size:84px_84px]" />
 
       <svg
         aria-label={`${tokenSymbol} holder bubble map`}
@@ -146,10 +143,6 @@ export default function HolderBubbleMap({
         role="img"
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
       >
-        <circle cx={CENTER.x} cy={CENTER.y} fill="none" r="115" stroke="rgba(148,163,184,0.045)" />
-        <circle cx={CENTER.x} cy={CENTER.y} fill="none" r="285" stroke="rgba(148,163,184,0.03)" />
-        <circle cx={CENTER.x} cy={CENTER.y} fill="rgba(8,19,26,0.92)" r="36" stroke="rgba(207,250,254,0.2)" />
-
         {showLines &&
           links.map((link) => {
             const active = activeGroupIds.includes(link.groupId);
@@ -159,7 +152,7 @@ export default function HolderBubbleMap({
                 opacity={active ? 0.28 : 0.12}
                 stroke={link.color.line}
                 strokeLinecap="round"
-                strokeWidth="1.2"
+                strokeWidth="1.1"
                 x1={link.from.x}
                 x2={link.to.x}
                 y1={link.from.y}
@@ -175,11 +168,10 @@ export default function HolderBubbleMap({
             activeGroupIds.length > 0 &&
             bubble.relationshipGroupIds.some((id) => activeGroupIds.includes(id));
           const dimmedByFocus = activeGroupIds.length > 0 && !selected && !hovered && !related;
-          const dimmedByView = isDimmedByView(bubble, viewMode);
-          const opacity = dimmedByFocus || dimmedByView ? 0.3 : 1;
+          const opacity = dimmedByFocus ? 0.32 : 1;
           const scale = hovered ? 1.08 : selected ? 1.04 : 1;
           const showWalletLabel =
-            showLabels && (selected || hovered || bubble.rank <= 3);
+            selected || hovered || (showLabels && bubble.rank <= 3);
 
           return (
             <g key={bubble.address}>
@@ -209,6 +201,11 @@ export default function HolderBubbleMap({
                 role="button"
                 tabIndex={0}
               >
+                <title>
+                  {`#${bubble.rank} ${bubble.shortAddress} - ${
+                    bubble.ownershipText || "ownership unavailable"
+                  }`}
+                </title>
                 <circle
                   cx={bubble.x}
                   cy={bubble.y}
@@ -255,20 +252,16 @@ export default function HolderBubbleMap({
         })}
       </svg>
 
-      <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 flex h-[70px] w-[70px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-cyan-100/14 bg-[#071219]/94 shadow-[0_0_42px_rgba(34,211,238,0.14)]">
+      <div className="pointer-events-none absolute left-5 top-5 z-20 flex items-center gap-2 rounded-full border border-white/10 bg-black/35 px-3 py-2 backdrop-blur-xl">
         {tokenLogoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img alt={tokenSymbol} className="h-12 w-12 rounded-full object-cover" src={tokenLogoUrl} />
+          <img alt={tokenSymbol} className="h-7 w-7 rounded-full object-cover" src={tokenLogoUrl} />
         ) : (
-          <span className="text-lg font-semibold text-cyan-100/72">
+          <span className="flex h-7 w-7 items-center justify-center rounded-full border border-cyan-100/14 bg-cyan-100/[0.04] text-xs font-semibold text-cyan-100/72">
             {tokenSymbol.replace("$", "").slice(0, 2)}
           </span>
         )}
-        {showLabels && (
-          <span className="absolute -bottom-7 rounded-full border border-white/10 bg-black/60 px-3 py-1 text-xs font-medium text-cyan-100/66">
-            {tokenSymbol}
-          </span>
-        )}
+        <span className="text-xs font-medium text-white/46">{tokenSymbol}</span>
       </div>
     </div>
   );
@@ -357,18 +350,25 @@ function buildGroupAnchors(
   return new Map(
     rankedGroups.map(({ bestRank, group, members }, index) => {
       const hash = hashToNumber(group.id);
-      const angle = index * GOLDEN_ANGLE + signedJitter(hash, 8) * 0.32;
-      const majorPull = bestRank <= 5 ? 36 : 0;
-      const radius = clamp(
-        230 + Math.sqrt(index + 1) * 34 + unsignedJitter(hash, 34) - majorPull + Math.min(28, members.length * 3),
-        210,
-        310
-      );
+      const anchorZones = [
+        { x: 520, y: 184 },
+        { x: 735, y: 392 },
+        { x: 306, y: 508 },
+        { x: 235, y: 226 },
+        { x: 842, y: 164 },
+        { x: 592, y: 548 },
+      ];
+      const zone = anchorZones[index % anchorZones.length];
+      const rankPull = bestRank <= 5 ? -20 : 0;
       return [
         group.id,
         {
-          x: clamp(CENTER.x + Math.cos(angle) * radius, 115, 885),
-          y: clamp(CENTER.y + Math.sin(angle) * radius * 0.76, 95, 585),
+          x: clamp(zone.x + signedJitter(hash, 7) * 74, 105, 895),
+          y: clamp(
+            zone.y + signedJitter(hash, 13) * 58 + rankPull + Math.min(24, members.length * 2),
+            88,
+            592
+          ),
         },
       ] as const;
     })
@@ -384,46 +384,48 @@ function connectedPosition(
   const members = groups.find((group) => group.id === groupId)?.nodeAddresses || [];
   const index = Math.max(0, members.indexOf(node.address));
   const hash = hashToNumber(node.address);
-  const angle = index * GOLDEN_ANGLE + signedJitter(hash, 12) * 0.44;
-  const cloud = clamp(38 + Math.sqrt(index + 1) * 20 + unsignedJitter(hash, 28), 35, 100);
-  const tokenPull = isMajorHolder(node) ? 0.28 : 0;
+  const angle = index * GOLDEN_ANGLE + signedJitter(hash, 12) * 0.9;
+  const cloud = clamp(30 + Math.sqrt(index + 1) * 18 + unsignedJitter(hash, 28), 28, 112);
   const x = anchor.x + Math.cos(angle) * cloud;
   const y = anchor.y + Math.sin(angle) * cloud * 0.8;
 
   return {
-    x: x + (CENTER.x - x) * tokenPull,
-    y: y + (CENTER.y - y) * tokenPull,
+    x,
+    y,
   };
 }
 
 function majorPosition(node: HolderBubbleMapNode, index: number, total: number) {
   const hash = hashToNumber(node.address);
-  const angle = index * GOLDEN_ANGLE + signedJitter(hash, 6) * 0.26;
-  const radius = clamp(
-    140 + Math.sqrt(index + 1) * (total <= 5 ? 34 : 26) + unsignedJitter(hash, 32),
-    135,
-    220
-  );
+  const anchorZones = [
+    { x: 420, y: 292 },
+    { x: 612, y: 270 },
+    { x: 370, y: 410 },
+    { x: 646, y: 430 },
+    { x: 500, y: 206 },
+    { x: 498, y: 514 },
+  ];
+  const zone = anchorZones[index % anchorZones.length];
+  const totalShift = total <= 2 ? 42 : 0;
 
   return {
-    x: CENTER.x + Math.cos(angle) * radius,
-    y: CENTER.y + Math.sin(angle) * radius * 0.78,
+    x: zone.x + signedJitter(hash, 9) * (58 + totalShift),
+    y: zone.y + signedJitter(hash, 15) * 46,
   };
 }
 
 function isolatedPosition(node: HolderBubbleMapNode, index: number, total: number) {
   const hash = hashToNumber(node.address);
-  const angle = index * GOLDEN_ANGLE + signedJitter(hash, 10) * 0.34;
-  const sparsePush = total <= 10 ? 50 : total <= 15 ? 24 : 0;
-  const radius = clamp(
-    250 + Math.sqrt(index + 1) * (total <= 15 ? 48 : 38) + unsignedJitter(hash, 48) + sparsePush,
-    250,
-    430
-  );
+  const columnCount = total <= 12 ? 4 : 6;
+  const row = Math.floor(index / columnCount);
+  const column = index % columnCount;
+  const xStep = WIDTH / (columnCount + 1);
+  const baseX = xStep * (column + 1);
+  const baseY = 88 + ((row * (total <= 12 ? 112 : 92) + unsignedJitter(hash, 74)) % 540);
 
   return {
-    x: CENTER.x + Math.cos(angle) * radius,
-    y: CENTER.y + Math.sin(angle) * radius * 0.74,
+    x: baseX + signedJitter(hash, 5) * 78,
+    y: baseY + signedJitter(hash, 11) * 44,
   };
 }
 
@@ -451,18 +453,9 @@ function resolveCollisions(nodes: PositionedBubble[]) {
         other.y += ny * push;
       }
 
-      const centerDistance = distance(node, CENTER) || 0.1;
-      const protectedDistance = TOKEN_PROTECTED_RADIUS + node.radius;
-      if (centerDistance < protectedDistance) {
-        const dx = node.x - CENTER.x;
-        const dy = node.y - CENTER.y;
-        node.x += (dx / centerDistance) * (protectedDistance - centerDistance);
-        node.y += (dy / centerDistance) * (protectedDistance - centerDistance);
-      }
-
       if (node.anchor) {
-        node.x += (node.anchor.x - node.x) * 0.012;
-        node.y += (node.anchor.y - node.y) * 0.012;
+        node.x += (node.anchor.x - node.x) * 0.008;
+        node.y += (node.anchor.y - node.y) * 0.008;
       }
 
       node.x = clamp(node.x, MIN_X + node.radius, MAX_X - node.radius);
@@ -496,28 +489,16 @@ function choosePrimaryGroups(
 }
 
 function bubbleDiameter(node: HolderBubbleMapNode, holderCount: number) {
-  const ownershipBoost = Math.min(34, Math.sqrt(Math.max(node.ownership, 0)) * 14);
-  const rankBoost =
-    node.rank === 1 ? 24 : node.rank <= 3 ? 18 : node.rank <= 10 ? 10 : node.rank <= 25 ? 4 : 0;
-  const concentration = node.concentrationScore || 0;
-  const concentrationBoost = concentration >= 75 ? 8 : concentration >= 50 ? 5 : 0;
-  const activity = node.activityScore || 0;
-  const activityBoost = activity >= 80 ? 4 : activity >= 50 ? 2 : 0;
-  const min = holderCount <= 15 ? 20 : 16;
+  const radius =
+    node.ownership > 0
+      ? clamp(8 + Math.sqrt(node.ownership) * 12, 8, 56)
+      : rankFallbackRadius(node.rank, holderCount);
 
-  return clamp(16 + ownershipBoost + rankBoost + concentrationBoost + activityBoost, min, 72);
+  return radius * 2;
 }
 
 function isMajorHolder(node: HolderBubbleMapNode) {
   return node.rank <= 5 || node.ownership >= 1;
-}
-
-function isDimmedByView(node: PositionedBubble, viewMode: HolderBubbleMapProps["viewMode"]) {
-  if (viewMode === "all") return false;
-  if (viewMode === "clusters") return !node.groupId;
-  if (viewMode === "risk") return node.riskContribution < 60 && (node.concentrationScore || 0) < 60;
-  if (viewMode === "whales") return node.rank > 10 && node.ownership < 1;
-  return false;
 }
 
 function behaviorDotColor(node: PositionedBubble) {
@@ -527,6 +508,15 @@ function behaviorDotColor(node: PositionedBubble) {
   }
   if (node.category === "fresh") return "rgba(147,197,253,0.64)";
   return node.color.dot;
+}
+
+function rankFallbackRadius(rank: number, holderCount: number) {
+  const sparseBoost = holderCount <= 15 ? 2 : 0;
+  if (rank <= 1) return 36 + sparseBoost;
+  if (rank <= 3) return 30 + sparseBoost;
+  if (rank <= 10) return 23 + sparseBoost;
+  if (rank <= 25) return 17 + sparseBoost;
+  return 10 + sparseBoost;
 }
 
 function colorForGroup(cluster: HolderBubbleMapCluster, index: number) {
@@ -560,12 +550,6 @@ function unsignedJitter(hash: number, range: number) {
 
 function signedJitter(hash: number, shift: number) {
   return (((hash >>> shift) % 200) - 100) / 100;
-}
-
-function distance(a: { x: number; y: number }, b: { x: number; y: number }) {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  return Math.sqrt(dx * dx + dy * dy);
 }
 
 function clamp(value: number, min: number, max: number) {

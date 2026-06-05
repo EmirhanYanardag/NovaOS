@@ -29,6 +29,17 @@ import {
   type WalletReputationResult,
 } from "../../lib/wallet-reputation";
 import {
+  deriveNovaArenaStance,
+  getArenaProgress,
+  getDailyArenaWindow,
+  getTimeRemaining,
+  getWeeklyArenaWindow,
+  type ArenaTimeframe as NovaArenaTimeframe,
+  type ArenaWindow,
+  type NovaArenaStance,
+  type NovaArenaStanceResult,
+} from "../../lib/arena-engine";
+import {
   calculateTokenFlowSummaryV2,
   calculateWalletFlowV2,
   type TokenFlowSummaryV2,
@@ -700,61 +711,43 @@ type ExplainableIntelligenceReport = {
   methodology: string;
 };
 
-type ArenaStance = "bullish" | "accumulate" | "bearish";
-type ArenaTimeframe = "24h" | "7d" | "30d";
-type ArenaOutcomeStatus = "pending" | "ready_for_resolution" | "resolved";
-type ArenaStanceConfidence = "High" | "Medium" | "Low";
+type ArenaVote = "Bullish" | "Accumulate" | "Bearish";
+type ArenaResultStatus = "Pending" | "Awaiting Settlement" | "Resolved";
+type ArenaWinner = "NovaOS" | "Human" | "Tie";
 
-type ArenaEntry = {
+type ArenaVoteEntry = {
   id: string;
-  tokenSymbol: string;
-  tokenName: string;
-  tokenLogo: string;
-  chain: string;
   tokenAddress: string;
-  pairAddress: string;
-  createdAt: string;
-  updatedAt: string;
-  targetResolveAt: string;
-  timeframe: ArenaTimeframe;
-  aiStance: ArenaStance;
-  aiStanceConfidence: ArenaStanceConfidence;
-  aiConvictionScore: number;
-  aiSupportReasons: string[];
-  aiRiskReasons: string[];
-  humanStance: ArenaStance;
-  humanConfidence: number;
-  humanNote: string;
-  status: ArenaOutcomeStatus;
-  outcome: null;
-  winner: null;
-};
-
-type HumanArenaView = {
-  humanScore: number;
-  humanLabel?: string;
-  note?: string;
-  createdAt?: string;
-  updatedAt: string;
+  tokenSymbol: string;
+  chain: string;
+  timeframe: NovaArenaTimeframe;
+  arenaWindowId: string;
+  humanVote: ArenaVote;
+  submittedAt: string;
+  aiPublishedStance?: NovaArenaStance;
+  aiPublishedScore?: number;
+  aiPublishedAt?: string;
+  resultStatus: ArenaResultStatus;
+  winner?: ArenaWinner;
+  resolvedAt?: string;
 };
 
 const thesisText =
   "Holder Intelligence V1 uses live holder rankings, balances and ownership percentages. Behavioral metrics will be unlocked in Wallet Behavior Engine V2.";
 const DEV_CACHE_PANEL = process.env.NODE_ENV !== "production";
+const SHOW_INTERNAL_FORMULA_VALIDATION_TOOLS = false;
+const SHOW_INTERNAL_DEVELOPER_DIAGNOSTICS = false;
 const CONVICTION_HISTORY_STORAGE_KEY = "novaos.convictionHistory.v2";
 const CONVICTION_HISTORY_MAX_SNAPSHOTS = 100;
 const WATCHLIST_STORAGE_KEY = "novaos.watchlist.v1";
 const FORMULA_VALIDATION_STORAGE_KEY = "novaos.formulaValidation.v1";
 const FORMULA_VALIDATION_MAX_SNAPSHOTS = 200;
-const AI_HUMAN_ARENA_STORAGE_KEY = "novaos.aiHumanArena.v2";
-const AI_HUMAN_ARENA_V1_STORAGE_KEY = "novaos.aiHumanArena.v1";
+const AI_HUMAN_ARENA_STORAGE_KEY = "novaos.aiHumanArena.v1";
 
 const terminalSections: TerminalSection[] = [
   "Overview",
   "Conviction Engine",
-  "Conviction History",
   "AI vs Human",
-  "Bubble Intelligence",
   "Wallet Flows",
   "Insider Scan",
   "Social Feed",
@@ -767,7 +760,7 @@ const overviewHolderGridClass =
 const insiderPreviewGridClass =
   "grid-cols-[minmax(150px,1.35fr)_minmax(90px,0.75fr)_minmax(120px,1fr)_minmax(150px,1.15fr)_minmax(95px,0.7fr)_minmax(85px,0.65fr)_minmax(130px,1fr)]";
 const fullHolderGridClass =
-  "grid-cols-[48px_minmax(150px,1.35fr)_minmax(90px,0.75fr)_minmax(95px,0.75fr)_minmax(130px,1fr)_minmax(150px,1.15fr)_minmax(80px,0.6fr)_minmax(80px,0.6fr)_minmax(105px,0.75fr)_minmax(95px,0.7fr)]";
+  "grid-cols-[minmax(150px,1.35fr)_minmax(90px,0.75fr)_minmax(130px,1fr)_minmax(110px,0.8fr)_minmax(80px,0.55fr)]";
 const terminalSurfaceClass =
   "rounded-[2rem] border border-white/10 bg-white/[0.03] shadow-[0_24px_90px_rgba(0,0,0,0.24)] backdrop-blur-2xl";
 const terminalHeaderSurfaceClass =
@@ -2734,31 +2727,34 @@ const [holderSummary, setHolderSummary] = useState({
           )}
 
           {activeSection === "Conviction Engine" && (
-            <SectionShell
-              eyebrow="Conviction Engine"
-              title="Score Explanation"
-              description="Exactly how NovaOS produced the final conviction score for this token."
-            >
+            <section className="space-y-4">
+              <ConvictionHero token={token} tokenData={tokenData} />
               <ExplainableConvictionEnginePanel
                 data={explainableConviction}
                 error={explainableConvictionError}
                 formulaV3={convictionFormulaV3}
+                holderIntelligenceSummary={holderIntelligenceSummary}
+                insiderRiskV2={insiderRiskV2}
                 loadState={explainableConvictionState}
+                tokenFlowSummaryV2={tokenFlowSummaryV2}
+                walletReputationSummary={walletReputationSummary}
               />
-              <FormulaValidationLogPanel
-                canSave={Boolean(
-                  (tokenData.tokenAddress || tokenData.pairAddress) &&
-                    explainableConviction &&
-                    convictionFormulaV3
-                )}
-                onClearAll={clearFormulaValidationLog}
-                onDeleteSnapshot={deleteFormulaValidationSnapshot}
-                onSaveCurrent={saveCurrentFormulaValidationSnapshot}
-                onUpdateSnapshot={updateFormulaValidationSnapshot}
-                snapshots={formulaValidationSnapshots}
-                status={formulaValidationStatus}
-              />
-              {DEV_CACHE_PANEL && (
+              {SHOW_INTERNAL_FORMULA_VALIDATION_TOOLS && (
+                <FormulaValidationLogPanel
+                  canSave={Boolean(
+                    (tokenData.tokenAddress || tokenData.pairAddress) &&
+                      explainableConviction &&
+                      convictionFormulaV3
+                  )}
+                  onClearAll={clearFormulaValidationLog}
+                  onDeleteSnapshot={deleteFormulaValidationSnapshot}
+                  onSaveCurrent={saveCurrentFormulaValidationSnapshot}
+                  onUpdateSnapshot={updateFormulaValidationSnapshot}
+                  snapshots={formulaValidationSnapshots}
+                  status={formulaValidationStatus}
+                />
+              )}
+              {SHOW_INTERNAL_DEVELOPER_DIAGNOSTICS && (
                 <DevCacheStatusPanel
                   data={cacheStatus}
                   error={cacheStatusError}
@@ -2768,7 +2764,7 @@ const [holderSummary, setHolderSummary] = useState({
                   unifiedAnalysisState={unifiedAnalysisState}
                 />
               )}
-            </SectionShell>
+            </section>
           )}
 
           {activeSection === "Conviction History" && (
@@ -2844,17 +2840,11 @@ const [holderSummary, setHolderSummary] = useState({
               holderError={holderError}
               holderLoadState={holderLoadState}
               onSelectWallet={openWalletDrawer}
-              personalityError={walletPersonalityPreviewError}
-              personalityLoadState={walletPersonalityPreviewState}
-              personalityPreviews={walletPersonalityPreviews}
               token={token}
               tokenData={tokenData}
               tokenIntelligence={tokenIntelligence}
               holderIntelligenceMatrix={holderIntelligenceMatrix}
-              holderIntelligenceSummary={holderIntelligenceSummary}
               insiderRiskV2={insiderRiskV2}
-              walletReputationResults={walletReputationResults}
-              walletReputationSummary={walletReputationSummary}
               walletRows={walletRows}
             />
           )}
@@ -3161,7 +3151,7 @@ function SectionShell({
   description,
   children,
 }: {
-  eyebrow: string;
+  eyebrow?: string;
   title: React.ReactNode;
   description: string;
   children: React.ReactNode;
@@ -3169,13 +3159,60 @@ function SectionShell({
   return (
     <section className="space-y-4">
       <div className={`${terminalSurfaceClass} p-5`}>
-        <p className={terminalEyebrowClass}>{eyebrow}</p>
-        <div className="mt-3 flex flex-col gap-2 xl:flex-row xl:items-end xl:justify-between">
+        {eyebrow && <p className={terminalEyebrowClass}>{eyebrow}</p>}
+        <div className={`${eyebrow ? "mt-3" : ""} flex flex-col gap-2 xl:flex-row xl:items-end xl:justify-between`}>
           <h2 className={`max-w-2xl ${terminalTitleClass}`}>{title}</h2>
           <p className={`max-w-xl ${terminalSubtitleClass}`}>{description}</p>
         </div>
       </div>
       {children}
+    </section>
+  );
+}
+
+function ConvictionHero({
+  token,
+  tokenData,
+}: {
+  token: string;
+  tokenData: TokenResult;
+}) {
+  const logoUrl = resolveTokenLogo(tokenData);
+  const [failedLogoUrl, setFailedLogoUrl] = useState("");
+  const showLogo = Boolean(logoUrl && failedLogoUrl !== logoUrl);
+
+  return (
+    <section className="relative min-h-[168px] overflow-hidden rounded-[2rem] border border-white/10 bg-[#06090d]/92 p-5 shadow-[0_24px_90px_rgba(0,0,0,0.28)] backdrop-blur-2xl">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_82%_42%,rgba(180,240,255,0.16),transparent_42%)]" />
+      <div className="pointer-events-none absolute inset-y-0 right-0 w-2/3 bg-gradient-to-l from-cyan-100/[0.055] via-cyan-100/[0.02] to-transparent" />
+      {showLogo && (
+        <div className="pointer-events-none absolute -right-12 top-1/2 h-64 w-64 -translate-y-1/2 opacity-[0.12] blur-3xl">
+          <Image
+            alt=""
+            className="object-cover"
+            fill
+            sizes="256px"
+            src={logoUrl || ""}
+            unoptimized
+            onError={() => setFailedLogoUrl(logoUrl || "")}
+          />
+        </div>
+      )}
+      <div className="relative flex min-h-[128px] items-center justify-between gap-5">
+        <div className="min-w-0">
+          <h1 className="text-4xl font-semibold tracking-[-0.06em] text-white/92 md:text-5xl">
+            Nova Conviction
+          </h1>
+        </div>
+        <div className="relative flex shrink-0 items-center justify-center">
+          <div className="absolute h-28 w-28 rounded-full bg-cyan-100/10 blur-2xl" />
+          <TokenAvatar
+            logoUrl={showLogo ? logoUrl : undefined}
+            sizeClass="h-24 w-24 md:h-28 md:w-28"
+            token={token}
+          />
+        </div>
+      </div>
     </section>
   );
 }
@@ -5688,13 +5725,34 @@ function ExplainableConvictionEnginePanel({
   data,
   error,
   formulaV3,
+  holderIntelligenceSummary,
+  insiderRiskV2,
   loadState,
+  tokenFlowSummaryV2,
+  walletReputationSummary,
 }: {
   data: ExplainableConvictionData | null;
   error: string;
   formulaV3: ConvictionFormulaV3Result | null;
+  holderIntelligenceSummary: HolderIntelligenceSummary | null;
+  insiderRiskV2: InsiderRiskV2Result;
   loadState: HolderLoadState;
+  tokenFlowSummaryV2: TokenFlowSummaryV2 | null;
+  walletReputationSummary: TokenWalletReputationSummary | null;
 }) {
+  if (loadState === "loaded" && data) {
+    return (
+      <NovaConvictionModelView
+        data={data}
+        formulaV3={formulaV3}
+        holderIntelligenceSummary={holderIntelligenceSummary}
+        insiderRiskV2={insiderRiskV2}
+        tokenFlowSummaryV2={tokenFlowSummaryV2}
+        walletReputationSummary={walletReputationSummary}
+      />
+    );
+  }
+
   return (
     <Panel title="Nova Conviction" tag="Nova Conviction Model">
       {loadState === "idle" && (
@@ -5710,10 +5768,6 @@ function ExplainableConvictionEnginePanel({
           {error || "Explainable Conviction is unavailable right now."}
         </BehaviorPreviewState>
       )}
-
-      {loadState === "loaded" && data && (
-        <NovaConvictionModelView data={data} formulaV3={formulaV3} />
-      )}
     </Panel>
   );
 }
@@ -5721,9 +5775,17 @@ function ExplainableConvictionEnginePanel({
 function NovaConvictionModelView({
   data,
   formulaV3,
+  holderIntelligenceSummary,
+  insiderRiskV2,
+  tokenFlowSummaryV2,
+  walletReputationSummary,
 }: {
   data: ExplainableConvictionData;
   formulaV3: ConvictionFormulaV3Result | null;
+  holderIntelligenceSummary: HolderIntelligenceSummary | null;
+  insiderRiskV2: InsiderRiskV2Result;
+  tokenFlowSummaryV2: TokenFlowSummaryV2 | null;
+  walletReputationSummary: TokenWalletReputationSummary | null;
 }) {
   const finalScore = Math.round(
     formulaV3?.finalConvictionScoreV3 ?? data.finalConvictionScore
@@ -5733,100 +5795,114 @@ function NovaConvictionModelView({
     (best, pillar) => (!best || pillar.score > best.score ? pillar : best),
     pillarCards[0]
   );
-  const mainPressure = buildNovaMainPressure({ data, formulaV3 });
-  const headline = buildNovaConvictionHeadline({
-    data,
+  const mainLimiter = pillarCards.reduce(
+    (weakest, pillar) =>
+      !weakest || pillar.score < weakest.score ? pillar : weakest,
+    pillarCards[0]
+  );
+  const convictionLabel = novaConvictionLabel(finalScore);
+  const thesis = buildNovaConvictionThesis({
     finalScore,
-    formulaV3,
     strongestSupport,
+    mainLimiter,
   });
-  const limitingFactors = buildNovaLimitingFactors({ data, formulaV3 });
-  const positiveDrivers = buildNovaPositiveDrivers({ data, formulaV3 });
+  const pillarAnalyses = buildNovaPillarAnalyses({
+    data,
+    formulaV3,
+    holderIntelligenceSummary,
+    insiderRiskV2,
+    tokenFlowSummaryV2,
+    walletReputationSummary,
+  });
+  const confidenceScore = Math.round(data.dataConfidence.score);
+  const confidenceContextLabel =
+    data.dataConfidence.label || confidenceScoreLabel(confidenceScore);
 
   return (
     <div className="space-y-4">
-          <div className="rounded-3xl border border-cyan-100/12 bg-cyan-100/[0.025] p-5 shadow-[0_0_40px_rgba(103,232,249,0.06)]">
-            <div className="grid gap-5 xl:grid-cols-[0.62fr_1.38fr] xl:items-center">
-              <div>
-                <p className="text-[0.64rem] uppercase tracking-[0.22em] text-cyan-100/45">
-                  Nova Conviction
-                </p>
-                <div className="mt-4 flex items-end gap-2">
-                  <p className="text-7xl font-light tracking-[-0.065em] text-white md:text-8xl">
-                    {finalScore}
-                  </p>
-                  <p className="pb-3 text-sm text-white/35">/100</p>
-                </div>
-                <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/8">
-                  <div
-                    className="h-full rounded-full bg-cyan-100/70 shadow-[0_0_18px_rgba(180,240,255,0.4)]"
-                    style={{
-                      width: `${normalizeScore(finalScore)}%`,
-                    }}
-                  />
-                </div>
-              </div>
-              <div>
-                <p className="text-lg leading-snug text-white/82">
-                  {headline}
-                </p>
-                <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                  <ConvictionSummaryChip
-                    label="Main Support"
-                    value={`${strongestSupport.label} ${formatScoreValue(
-                      strongestSupport.score
-                    )}`}
-                  />
-                  <ConvictionSummaryChip
-                    label="Main Pressure"
-                    value={mainPressure}
-                    tone="risk"
-                  />
-                  <ConvictionSummaryChip
-                    label="Data Confidence"
-                    value={`${data.dataConfidence.label} ${Math.round(
-                      data.dataConfidence.score
-                    )}`}
-                  />
-                </div>
-              </div>
+      <div className="rounded-3xl border border-cyan-100/12 bg-cyan-100/[0.025] p-5 shadow-[0_0_40px_rgba(103,232,249,0.06)]">
+        <div className="grid gap-6 xl:grid-cols-[0.54fr_1.46fr] xl:items-center">
+          <div>
+            <p className="text-[0.64rem] uppercase tracking-[0.22em] text-cyan-100/45">
+              Nova Conviction Model
+            </p>
+            <div className="mt-4 flex items-end gap-2">
+              <p className="text-7xl font-light tracking-[-0.065em] text-white md:text-8xl">
+                {finalScore}
+              </p>
+              <p className="pb-3 text-sm text-white/35">/100</p>
+            </div>
+            <p className="mt-3 text-lg font-medium text-cyan-50/78">
+              {convictionLabel}
+            </p>
+            <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/8">
+              <div
+                className="h-full rounded-full bg-cyan-100/70 shadow-[0_0_18px_rgba(180,240,255,0.4)]"
+                style={{
+                  width: `${normalizeScore(finalScore)}%`,
+                }}
+              />
             </div>
           </div>
-
-      <div className="grid gap-3 md:grid-cols-3">
-        {pillarCards.map((pillar) => (
-          <NovaConvictionPillarCard key={pillar.label} pillar={pillar} />
-        ))}
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        <ConvictionExplanationList
-          title="Positive Drivers"
-          items={positiveDrivers}
-        />
-        <ConvictionExplanationList
-          title="Risk / Limiting Factors"
-          items={limitingFactors}
-          tone="risk"
-        />
+          <div className="max-w-3xl xl:pl-2">
+            <p className="text-xs uppercase tracking-[0.18em] text-white/34">
+              Conviction Summary
+            </p>
+            <p className="mt-3 text-lg leading-relaxed text-white/74">
+              {thesis}
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
         <p className="text-xs uppercase tracking-[0.18em] text-white/38">
-          Methodology
+          Why NovaOS reached this conclusion
         </p>
-        <p className="mt-3 max-w-3xl text-xs leading-relaxed text-white/38">
-          Nova Conviction uses holder quality, structural safety, and market
-          integrity. It does not calculate PnL, win rate, average entry/exit,
-          identity, or future price.
-        </p>
+        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+          <ConvictionReasonCard
+            detail={pillarReasonDetail(strongestSupport.label, "support")}
+            label="Strongest Contributor"
+            score={strongestSupport.score}
+            title={strongestSupport.label}
+          />
+          <ConvictionReasonCard
+            detail={pillarReasonDetail(mainLimiter.label, "limit")}
+            label="Main Limiter"
+            score={mainLimiter.score}
+            title={mainLimiter.label}
+            tone="risk"
+          />
+          <ConvictionReasonCard
+            detail={confidenceContextDetail(confidenceContextLabel)}
+            label="Confidence Context"
+            score={confidenceScore}
+            title={confidenceContextLabel}
+          />
+        </div>
       </div>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        {pillarAnalyses.map((pillar) => (
+          <NovaConvictionPillarAnalysisCard
+            key={pillar.label}
+            pillar={pillar}
+          />
+        ))}
+      </div>
+
+      <p className="px-1 text-xs leading-relaxed text-white/30">
+        Nova Conviction uses holder quality, structural safety, and market
+        integrity. It does not calculate future price, PnL, win rate, average
+        entry/exit, wallet identity, or financial advice.
+      </p>
     </div>
   );
 }
 
 type NovaConvictionPillar = {
   detail: string;
+  interpretation: string;
   label: string;
   score: number;
 };
@@ -5844,16 +5920,28 @@ function buildNovaConvictionPillars({
         label: "Holder Quality",
         score: formulaV3.pillarScores.holderQualityScore,
         detail: "Holder support, reputation, and wallet behavior quality.",
+        interpretation: pillarInterpretation(
+          "Holder Quality",
+          formulaV3.pillarScores.holderQualityScore
+        ),
       },
       {
         label: "Structural Safety",
         score: formulaV3.pillarScores.structuralSafetyScore,
         detail: "Concentration, bundle, cluster, and insider risk pressure.",
+        interpretation: pillarInterpretation(
+          "Structural Safety",
+          formulaV3.pillarScores.structuralSafetyScore
+        ),
       },
       {
         label: "Market Integrity",
         score: formulaV3.pillarScores.marketIntegrityScore,
         detail: "Liquidity trust, market momentum, and wallet-flow balance.",
+        interpretation: pillarInterpretation(
+          "Market Integrity",
+          formulaV3.pillarScores.marketIntegrityScore
+        ),
       },
     ];
   }
@@ -5867,111 +5955,351 @@ function buildNovaConvictionPillars({
           data.subScores.behaviorStability) /
           3
       ),
-      detail: "Fallback holder quality from canonical holder and wallet scores.",
+      detail: "Holder support, reputation, and wallet behavior quality.",
+      interpretation: pillarInterpretation(
+        "Holder Quality",
+        normalizeScore(
+          (data.subScores.holderIntegrity +
+            data.subScores.walletQuality +
+            data.subScores.behaviorStability) /
+            3
+        )
+      ),
     },
     {
       label: "Structural Safety",
       score: data.subScores.riskProtection,
-      detail: "Fallback structural safety from canonical risk protection.",
+      detail: "Concentration, bundle, cluster, and insider risk pressure.",
+      interpretation: pillarInterpretation(
+        "Structural Safety",
+        data.subScores.riskProtection
+      ),
     },
     {
       label: "Market Integrity",
       score: normalizeScore(
         (data.subScores.liquidityTrust + data.subScores.marketMomentum) / 2
       ),
-      detail: "Fallback market integrity from liquidity and momentum.",
+      detail: "Liquidity trust, market momentum, and wallet-flow balance.",
+      interpretation: pillarInterpretation(
+        "Market Integrity",
+        normalizeScore(
+          (data.subScores.liquidityTrust + data.subScores.marketMomentum) / 2
+        )
+      ),
     },
   ];
 }
 
-function buildNovaConvictionHeadline({
-  data,
+function novaConvictionLabel(score: number) {
+  if (score >= 70) return "High Conviction";
+  if (score >= 40) return "Moderate Conviction";
+  return "Low Conviction";
+}
+
+function buildNovaConvictionThesis({
   finalScore,
-  formulaV3,
   strongestSupport,
+  mainLimiter,
 }: {
-  data: ExplainableConvictionData;
   finalScore: number;
-  formulaV3: ConvictionFormulaV3Result | null;
   strongestSupport: NovaConvictionPillar;
+  mainLimiter: NovaConvictionPillar;
 }) {
-  if (!formulaV3) {
-    return data.explanation.headline;
-  }
+  const pillarSentence = `Strongest pillar: ${strongestSupport.label}. Main limiter: ${mainLimiter.label}.`;
 
-  if (finalScore >= 72) {
-    return `Nova Conviction is strong because ${strongestSupport.label.toLowerCase()} is the leading support under current evidence.`;
+  if (finalScore >= 70) {
+    return `High conviction profile. Holder quality, structural safety, and market integrity align strongly under currently available evidence. ${pillarSentence}`;
   }
-  if (finalScore >= 52) {
-    return `Nova Conviction is mixed as ${strongestSupport.label.toLowerCase()} is balanced against structural or market pressure.`;
+  if (finalScore >= 40) {
+    return `Moderate conviction profile. Supportive signals are present, but structural or market limitations prevent a clean high-conviction setup. ${pillarSentence}`;
   }
-  return `Nova Conviction is cautious because risk pressure and evidence limits outweigh the strongest support.`;
+  return `Low conviction profile. Structural pressure, weak holder quality, or limited market integrity currently outweigh supportive signals. ${pillarSentence}`;
 }
 
-function buildNovaMainPressure({
+function pillarInterpretation(label: string, score: number) {
+  const band = score >= 70 ? "high" : score >= 40 ? "moderate" : "low";
+
+  if (label === "Holder Quality") {
+    if (band === "high") {
+      return "Holder behavior and reputation provide meaningful support.";
+    }
+    if (band === "moderate") {
+      return "Holder quality is mixed, with both support and risk signals.";
+    }
+    return "Holder evidence is weak or risk-weighted.";
+  }
+
+  if (label === "Structural Safety") {
+    if (band === "high") {
+      return "Structural pressure appears limited under available evidence.";
+    }
+    if (band === "moderate") {
+      return "Some structural pressure exists, but not enough to fully dominate the profile.";
+    }
+    return "Concentration, cluster, bundle, or contract pressure limits conviction.";
+  }
+
+  if (band === "high") {
+    return "Liquidity and market-flow conditions are supportive.";
+  }
+  if (band === "moderate") {
+    return "Market structure is usable but not clearly strong.";
+  }
+  return "Liquidity, rotation, or distribution pressure weakens the setup.";
+}
+
+function pillarReasonDetail(
+  label: string,
+  reasonType: "support" | "limit"
+) {
+  if (label === "Holder Quality") {
+    return reasonType === "support"
+      ? "Holder behavior and reputation currently support the conviction profile."
+      : "Holder evidence is mixed or risk-weighted under currently loaded data.";
+  }
+
+  if (label === "Structural Safety") {
+    return reasonType === "support"
+      ? "Concentration, contract exposure, and relationship pressure are comparatively contained."
+      : "Concentration, contract exposure, or relationship pressure reduce structural confidence.";
+  }
+
+  return reasonType === "support"
+    ? "Liquidity, market participation, and wallet-flow balance are currently supportive."
+    : "Liquidity, rotation, or distribution pressure limits market confidence.";
+}
+
+function confidenceContextDetail(label: string) {
+  if (label === "High") {
+    return "Available data supports a broad conviction reading.";
+  }
+  if (label === "Medium") {
+    return "Available data supports a partial but usable conviction reading.";
+  }
+  if (label === "Low") {
+    return "Available data is limited, so conviction should be treated cautiously.";
+  }
+  return "Conviction confidence will improve as more token evidence becomes available.";
+}
+
+function ConvictionReasonCard({
+  detail,
+  label,
+  score,
+  title,
+  tone = "default",
+}: {
+  detail: string;
+  label: string;
+  score: number;
+  title: string;
+  tone?: "default" | "risk";
+}) {
+  const toneClass =
+    tone === "risk"
+      ? "border-amber-100/12 bg-amber-100/[0.03]"
+      : "border-cyan-100/12 bg-cyan-100/[0.03]";
+
+  return (
+    <div className={`rounded-2xl border p-3 ${toneClass}`}>
+      <p className="text-[0.64rem] uppercase tracking-[0.16em] text-white/34">
+        {label}
+      </p>
+      <div className="mt-2 flex items-baseline justify-between gap-3">
+        <p className="text-sm font-medium text-white/78">{title}</p>
+        <p className="font-mono text-xl font-semibold tabular-nums text-white/82">
+          {formatScoreValue(score)}
+        </p>
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-white/40">{detail}</p>
+    </div>
+  );
+}
+
+type NovaPillarSubScore = {
+  label: string;
+  note?: string;
+  score: number | null;
+  tone?: "score" | "pressure";
+};
+
+type NovaPillarAnalysis = NovaConvictionPillar & {
+  rows: NovaPillarSubScore[];
+};
+
+function buildNovaPillarAnalyses({
   data,
   formulaV3,
+  holderIntelligenceSummary,
+  insiderRiskV2,
+  tokenFlowSummaryV2,
+  walletReputationSummary,
 }: {
   data: ExplainableConvictionData;
   formulaV3: ConvictionFormulaV3Result | null;
-}) {
-  const primaryLimit =
-    formulaV3?.riskCapsApplied[0] ||
-    formulaV3?.limitingFactors[0] ||
-    formulaV3?.negativeDrivers[0];
+  holderIntelligenceSummary: HolderIntelligenceSummary | null;
+  insiderRiskV2: InsiderRiskV2Result;
+  tokenFlowSummaryV2: TokenFlowSummaryV2 | null;
+  walletReputationSummary: TokenWalletReputationSummary | null;
+}): NovaPillarAnalysis[] {
+  const pillars = buildNovaConvictionPillars({ data, formulaV3 });
 
-  if (primaryLimit) return polishConvictionLimitCopy(primaryLimit);
+  return pillars.map((pillar) => {
+    if (pillar.label === "Holder Quality") {
+      const supportBalance = holderSupportRiskBalance(holderIntelligenceSummary);
+      return {
+        ...pillar,
+        rows: [
+          {
+            label: "Holder Integrity",
+            score: data.subScores.holderIntegrity,
+            note: scoreLabel(data.subScores.holderIntegrity),
+          },
+          {
+            label: "Wallet Quality",
+            score: data.subScores.walletQuality,
+            note: scoreLabel(data.subScores.walletQuality),
+          },
+          {
+            label: "Behavior Stability",
+            score: data.subScores.behaviorStability,
+            note: scoreLabel(data.subScores.behaviorStability),
+          },
+          {
+            label: "Wallet Reputation",
+            score: walletReputationSummary?.averageReputation ?? null,
+            note:
+              typeof walletReputationSummary?.averageReputation === "number"
+                ? scoreLabel(walletReputationSummary.averageReputation)
+                : "Unavailable",
+          },
+          {
+            label: "Holder Support / Risk Balance",
+            score: supportBalance,
+            note:
+              supportBalance !== null
+                ? scoreLabel(supportBalance)
+                : "Unavailable",
+          },
+        ],
+      };
+    }
 
-  const riskScores: Array<[string, number | undefined]> = [
-    ["Insider Risk", data.subScores.insiderRisk],
-    ["Bundle Risk", data.bundleDetection?.bundleRiskScore],
-    ["Cluster Risk", data.subScores.clusterRisk],
-    ["Concentration Pressure", data.aggregation.averageConcentrationRisk],
-  ];
-  const pressure = riskScores
-    .filter((entry): entry is [string, number] => typeof entry[1] === "number")
-    .sort((a, b) => b[1] - a[1])[0];
+    if (pillar.label === "Structural Safety") {
+      return {
+        ...pillar,
+        rows: [
+          {
+            label: "Insider Pressure",
+            score: insiderRiskV2.insiderRiskScore,
+            note: pressureLabel(insiderRiskV2.insiderRiskScore),
+            tone: "pressure",
+          },
+          {
+            label: "Concentration Pressure",
+            score: insiderRiskV2.concentrationPressureScore,
+            note: pressureLabel(insiderRiskV2.concentrationPressureScore),
+            tone: "pressure",
+          },
+          {
+            label: "Cluster Exposure",
+            score: insiderRiskV2.clusterExposureScore,
+            note: pressureLabel(insiderRiskV2.clusterExposureScore),
+            tone: "pressure",
+          },
+          {
+            label: "Bundle Structure",
+            score: insiderRiskV2.bundleStructureScore,
+            note: pressureLabel(insiderRiskV2.bundleStructureScore),
+            tone: "pressure",
+          },
+          {
+            label: "Contract Dominance",
+            score: insiderRiskV2.contractDominanceScore,
+            note: pressureLabel(insiderRiskV2.contractDominanceScore),
+            tone: "pressure",
+          },
+        ],
+      };
+    }
 
-  return pressure ? `${pressure[0]} ${formatScoreValue(pressure[1])}` : "No dominant pressure";
+    const walletFlowScore = tokenFlowSummaryV2
+      ? overviewWalletFlowScore(tokenFlowSummaryV2)
+      : null;
+    return {
+      ...pillar,
+      rows: [
+        {
+          label: "Liquidity Trust",
+          score: data.subScores.liquidityTrust,
+          note: scoreLabel(data.subScores.liquidityTrust),
+        },
+        {
+          label: "Market Momentum",
+          score: data.subScores.marketMomentum,
+          note: scoreLabel(data.subScores.marketMomentum),
+        },
+        {
+          label: "Wallet Flow",
+          score: walletFlowScore,
+          note: walletFlowScore !== null ? scoreLabel(walletFlowScore) : "Unavailable",
+        },
+        {
+          label: "Accumulation Pressure",
+          score: tokenFlowSummaryV2?.accumulationPressure ?? null,
+          note:
+            typeof tokenFlowSummaryV2?.accumulationPressure === "number"
+              ? scoreLabel(tokenFlowSummaryV2.accumulationPressure)
+              : "Unavailable",
+        },
+        {
+          label: "Distribution Pressure",
+          score: tokenFlowSummaryV2?.distributionPressure ?? null,
+          note:
+            typeof tokenFlowSummaryV2?.distributionPressure === "number"
+              ? pressureLabel(tokenFlowSummaryV2.distributionPressure)
+              : "Unavailable",
+          tone: "pressure",
+        },
+      ],
+    };
+  });
 }
 
-function buildNovaLimitingFactors({
-  data,
-  formulaV3,
-}: {
-  data: ExplainableConvictionData;
-  formulaV3: ConvictionFormulaV3Result | null;
-}) {
-  const factors = [
-    ...(formulaV3?.riskCapsApplied || []),
-    ...(formulaV3?.limitingFactors || []),
-    ...(formulaV3?.negativeDrivers || []),
-    ...data.explanation.riskNotes,
-    ...data.dataConfidence.warnings,
-  ].map(polishConvictionLimitCopy);
-
-  return Array.from(new Set(factors.filter(Boolean))).slice(0, 3);
+function holderSupportRiskBalance(
+  summary: HolderIntelligenceSummary | null
+) {
+  if (!summary) return null;
+  const support = summary.strongSupportHolders + summary.mildSupportHolders;
+  const risk = summary.strongRiskHolders + summary.mildRiskHolders;
+  const total = support + risk;
+  if (!total) return null;
+  return normalizeScore((support / total) * 100);
 }
 
-function buildNovaPositiveDrivers({
-  data,
-  formulaV3,
-}: {
-  data: ExplainableConvictionData;
-  formulaV3: ConvictionFormulaV3Result | null;
-}) {
-  const drivers = [
-    ...(formulaV3?.positiveDrivers || []),
-    ...data.explanation.positives,
-  ];
-
-  return Array.from(new Set(drivers.filter(Boolean))).slice(0, 3);
+function scoreLabel(score: number) {
+  if (score >= 70) return "Strong";
+  if (score >= 40) return "Mixed";
+  return "Weak";
 }
 
-function NovaConvictionPillarCard({
+function pressureLabel(score: number) {
+  if (score >= 70) return "High Pressure";
+  if (score >= 40) return "Moderate Pressure";
+  return "Low Pressure";
+}
+
+function confidenceScoreLabel(score: number) {
+  if (score >= 70) return "High";
+  if (score >= 40) return "Medium";
+  return "Low";
+}
+
+function NovaConvictionPillarAnalysisCard({
   pillar,
 }: {
-  pillar: NovaConvictionPillar;
+  pillar: NovaPillarAnalysis;
 }) {
   return (
     <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
@@ -5994,100 +6322,49 @@ function NovaConvictionPillarCard({
           style={{ width: `${normalizeScore(pillar.score)}%` }}
         />
       </div>
+      <p className="mt-3 text-xs leading-relaxed text-white/42">
+        {pillar.interpretation}
+      </p>
+      <div className="mt-4 space-y-3">
+        {pillar.rows.map((row) => (
+          <NovaPillarSubScoreRow key={row.label} row={row} />
+        ))}
+      </div>
     </div>
   );
 }
 
-function WalletReputationPanel({
-  results,
-  summary,
-}: {
-  results: WalletReputationResult[];
-  summary: TokenWalletReputationSummary | null;
-}) {
-  const topSupport = summary?.topPositiveWallets[0];
-  const topRisk = summary?.topRiskWallets[0];
-  const lowConfidenceWallets = results.filter(
-    (wallet) => wallet.confidence === "Low"
-  ).length;
+function NovaPillarSubScoreRow({ row }: { row: NovaPillarSubScore }) {
+  const hasScore = typeof row.score === "number" && Number.isFinite(row.score);
+  const width = hasScore ? normalizeScore(row.score as number) : 0;
+  const barClass =
+    row.tone === "pressure"
+      ? "bg-amber-100/62 shadow-[0_0_14px_rgba(253,230,138,0.18)]"
+      : "bg-cyan-100/62 shadow-[0_0_14px_rgba(180,240,255,0.18)]";
 
   return (
-    <div className="rounded-3xl border border-cyan-100/10 bg-cyan-100/[0.025] p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-xs uppercase tracking-[0.18em] text-cyan-100/44">
-            Wallet Reputation
-          </p>
-          <p className="mt-2 max-w-3xl text-xs leading-relaxed text-white/36">
-            Wallet Reputation uses available holder metadata, activity,
-            concentration, behavior, relationship and risk signals. It does not
-            calculate profitability, win rate, entry price, exit price, or identity.
+    <div>
+      <div className="flex items-baseline justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-xs text-white/58">{row.label}</p>
+          <p className="mt-0.5 text-[0.66rem] text-white/28">
+            {row.note || (hasScore ? scoreLabel(row.score as number) : "Unavailable")}
           </p>
         </div>
-        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-white/48">
-          Supporting context only
-        </span>
+        <p
+          className={`font-mono text-sm tabular-nums ${
+            hasScore ? "text-white/66" : "text-white/24"
+          }`}
+        >
+          {hasScore ? formatScoreValue(row.score as number) : "Unavailable"}
+        </p>
       </div>
-
-      {!summary ? (
-        <BehaviorPreviewState>
-          Wallet reputation appears after holder rows and wallet evidence load.
-        </BehaviorPreviewState>
-      ) : (
-        <>
-          <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-            <BehaviorMetric
-              label="Avg Reputation"
-              value={summary.averageReputation}
-            />
-            <BehaviorMetric
-              label="Dominant Class"
-              value={summary.dominantWalletClass}
-            />
-            <BehaviorMetric label="Strong Wallets" value={summary.strongWallets} />
-            <BehaviorMetric
-              label="High-Risk Wallets"
-              value={summary.highRiskWallets}
-            />
-            <BehaviorMetric
-              label="Analyzed Wallets"
-              value={results.length || summary.analyzedWallets}
-            />
-          </div>
-
-          <div className="mt-4 grid gap-3 xl:grid-cols-[0.9fr_1.1fr]">
-            <div className="rounded-2xl border border-white/8 bg-black/18 p-3">
-              <p className="text-xs uppercase tracking-[0.18em] text-white/36">
-                Summary Verdict
-              </p>
-              <p className="mt-2 text-sm font-medium text-cyan-50/72">
-                {summary.summaryVerdict}
-              </p>
-              <p className="mt-2 text-xs leading-relaxed text-white/34">
-                Average conviction contribution is{" "}
-                {summary.averageConvictionContribution}/100; average risk
-                contribution is {summary.averageRiskContribution}/100.
-                {lowConfidenceWallets
-                  ? ` ${lowConfidenceWallets} wallet${
-                      lowConfidenceWallets === 1 ? "" : "s"
-                    } remain low-confidence.`
-                  : ""}
-              </p>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <WalletReputationMiniCard
-                label="Top Supporting Wallet"
-                wallet={topSupport}
-              />
-              <WalletReputationMiniCard
-                label="Top Risk Wallet"
-                tone="risk"
-                wallet={topRisk}
-              />
-            </div>
-          </div>
-        </>
-      )}
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/8">
+        <div
+          className={`h-full rounded-full ${barClass}`}
+          style={{ width: `${width}%` }}
+        />
+      </div>
     </div>
   );
 }
@@ -6298,9 +6575,7 @@ function InsiderRiskV2Panel({ result }: { result: InsiderRiskV2Result }) {
     ["Concentration", result.concentrationPressureScore],
     ["Cluster Exposure", result.clusterExposureScore],
     ["Bundle Structure", result.bundleStructureScore],
-    ["Fresh Ownership", result.freshOwnershipScore],
-    ["Contract Dominance", result.contractDominanceScore],
-    ["Relationship Intensity", result.relationshipIntensityScore],
+    ["Evidence Confidence", result.evidenceConfidenceScore],
   ] as const;
 
   return (
@@ -6308,7 +6583,7 @@ function InsiderRiskV2Panel({ result }: { result: InsiderRiskV2Result }) {
       <div className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr] xl:items-start">
         <div>
           <p className="text-xs uppercase tracking-[0.28em] text-amber-100/44">
-            Insider Mathematics V2
+            Insider Risk
           </p>
           <div className="mt-4 flex items-end gap-2">
             <p className="text-6xl font-light tracking-[-0.065em] text-white">
@@ -6322,32 +6597,22 @@ function InsiderRiskV2Panel({ result }: { result: InsiderRiskV2Result }) {
           <p className="mt-3 text-sm leading-relaxed text-white/48">
             {result.verdict}
           </p>
-          <p className="mt-3 text-xs leading-relaxed text-white/32">
-            Insider Risk V2 estimates structural risk from concentration,
-            cluster exposure, bundle-like behavior, fresh high-ownership wallets,
-            contract/system dominance, and relationship intensity. It does not
-            identify insiders or prove common ownership.
-          </p>
         </div>
 
         <div className="space-y-4">
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-2 sm:grid-cols-2">
             {componentScores.map(([label, value]) => (
               <BehaviorMetric key={label} label={label} value={value} />
             ))}
-            <BehaviorMetric
-              label="Evidence Confidence"
-              value={result.evidenceConfidenceScore}
-            />
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-3">
+          <div className="hidden">
             <InsiderV2List title="Detected Patterns" items={result.detectedPatterns.map((pattern) => `${pattern.label} · ${pattern.severity}`)} />
             <InsiderV2List title="Top Risk Holders" items={result.topRiskHolders.map((holder) => `${holder.shortAddress} · ${holder.riskContributionScore}/100`)} />
             <InsiderV2List title="Top Support Holders" items={result.topSupportHolders.map((holder) => `${holder.shortAddress} · ${holder.convictionContributionScore}/100`)} />
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-3">
+          <div className="hidden">
             <InsiderV2List title="Positive Evidence" items={result.positives} />
             <InsiderV2List title="Risk Evidence" items={result.negatives} />
             <InsiderV2List title="Missing Evidence" items={result.missingEvidence} />
@@ -6735,90 +7000,6 @@ function buildFormulaValidationStats(snapshots: FormulaValidationSnapshot[]) {
   );
 }
 
-function ConvictionSummaryChip({
-  label,
-  value,
-  tone = "default",
-}: {
-  label: string;
-  value: string;
-  tone?: "default" | "risk";
-}) {
-  const toneClass =
-    tone === "risk"
-      ? "border-amber-100/12 bg-amber-100/[0.035]"
-      : "border-cyan-100/12 bg-cyan-100/[0.035]";
-
-  return (
-    <div className={`rounded-2xl border px-3 py-2.5 ${toneClass}`}>
-      <p className="text-[0.64rem] uppercase tracking-[0.16em] text-white/35">
-        {label}
-      </p>
-      <p className="mt-1 truncate text-sm font-medium text-white/78">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function polishConvictionLimitCopy(item: string) {
-  const normalized = item.trim();
-
-  if (!normalized) return normalized;
-
-  if (
-    normalized.includes("Token-specific transfer in/out counts") ||
-    normalized.includes("transfer in/out counts")
-  ) {
-    return "Token-level trade reconstruction is not available in V1.";
-  }
-
-  if (
-    normalized.includes("Wallet profitability is not calculated") ||
-    normalized.includes("Win rate is not calculated") ||
-    normalized.includes("PnL, win rate")
-  ) {
-    return "Profitability and win-rate are not calculated in this version.";
-  }
-
-  if (normalized.includes("smart-money identity")) {
-    return normalized.replace("smart-money identity", "smart money identity");
-  }
-
-  return normalized;
-}
-
-function ConvictionExplanationList({
-  title,
-  items,
-  tone = "default",
-}: {
-  title: string;
-  items: string[];
-  tone?: "default" | "risk";
-}) {
-  const dotClass =
-    tone === "risk" ? "bg-amber-100/48" : "bg-cyan-100/45";
-  const textClass =
-    tone === "risk" ? "text-amber-50/48" : "text-white/38";
-
-  return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
-      <p className="text-xs uppercase tracking-[0.16em] text-white/38">
-        {title}
-      </p>
-      <div className="mt-3 space-y-2">
-        {(items.length ? items : ["No signal surfaced."]).map((item) => (
-          <div key={item} className="flex gap-2 text-xs leading-relaxed">
-            <span className={`mt-1.5 h-1 w-1 shrink-0 rounded-full ${dotClass}`} />
-            <span className={textClass}>{item}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function ExplainableConvictionSkeleton() {
   return (
     <div className="space-y-4">
@@ -7044,7 +7225,6 @@ type BubbleGraphCluster = {
   riskLevel?: "Low" | "Medium" | "Elevated";
 };
 
-type BubbleMapView = "all" | "clusters" | "risk" | "whales";
 type BubbleClusterColorKey =
   | "cyan"
   | "green"
@@ -7080,9 +7260,6 @@ function BubbleIntelligenceExperience({
   walletRows: WalletRow[];
 }) {
   const [selectedNode, setSelectedNode] = useState<BubbleGraphNode | null>(null);
-  const [bubbleMapView, setBubbleMapView] = useState<BubbleMapView>("all");
-  const [showBubbleLines, setShowBubbleLines] = useState(true);
-  const [showBubbleLabels, setShowBubbleLabels] = useState(false);
   const graph = useMemo(
     () =>
       buildBubbleGraph({
@@ -7096,8 +7273,6 @@ function BubbleIntelligenceExperience({
   );
   const activeNode =
     graph.nodes.find((node) => node.address === selectedNode?.address) ||
-    selectedNode ||
-    graph.nodes[0] ||
     null;
   const relationshipsDetected = graph.edges.filter(
     (edge) => edge.from !== "token" && edge.to !== "token"
@@ -7126,9 +7301,8 @@ function BubbleIntelligenceExperience({
               See Beyond the Chart
             </h1>
             <p className="mt-3 max-w-3xl text-sm leading-relaxed text-white/48">
-              A real wallet-ecosystem view for holder influence, behavioral
-              similarity, cluster overlap and conviction contribution. No
-              synthetic wallets or invented relationships are shown.
+              Visualize holder concentration, wallet clusters, and relationship
+              evidence behind the token.
             </p>
           </div>
           <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/24 px-4 py-3">
@@ -7177,29 +7351,22 @@ function BubbleIntelligenceExperience({
         </div>
       )}
 
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(360px,0.72fr)]">
+      <section
+        className={`grid gap-5 ${
+          activeNode ? "xl:grid-cols-[minmax(0,2.2fr)_minmax(340px,0.82fr)]" : "xl:grid-cols-[minmax(0,1fr)_minmax(260px,0.24fr)]"
+        }`}
+      >
         <div className="relative">
           <HolderBubbleMap
             clusters={graph.clusters}
             nodes={graph.nodes}
             onSelectWallet={(node) => setSelectedNode(node as BubbleGraphNode)}
             selectedWallet={selectedNode}
-            showLabels={showBubbleLabels}
-            showLines={showBubbleLines}
+            showLabels={false}
+            showLines={hasRelationships}
             tokenLogoUrl={resolveTokenLogo(tokenData)}
             tokenSymbol={token}
-            viewMode={bubbleMapView}
           />
-          <div className="absolute right-5 top-5 z-40">
-            <BubbleGraphControls
-              selectedView={bubbleMapView}
-              showLabels={showBubbleLabels}
-              showLines={showBubbleLines}
-              onToggleLabels={() => setShowBubbleLabels((value) => !value)}
-              onToggleLines={() => setShowBubbleLines((value) => !value)}
-              onViewChange={setBubbleMapView}
-            />
-          </div>
           {clusterLoadState === "loading" && graph.nodes.length === 0 && (
             <BubbleGraphSkeleton />
           )}
@@ -7221,103 +7388,38 @@ function BubbleIntelligenceExperience({
         <div className="min-h-0">
           <BubbleNodeDrawer
             node={activeNode}
-            token={token}
           />
         </div>
       </section>
-    </div>
-  );
-}
 
-function BubbleGraphControls({
-  onToggleLabels,
-  onToggleLines,
-  onViewChange,
-  selectedView,
-  showLabels,
-  showLines,
-}: {
-  onToggleLabels: () => void;
-  onToggleLines: () => void;
-  onViewChange: (view: BubbleMapView) => void;
-  selectedView: BubbleMapView;
-  showLabels: boolean;
-  showLines: boolean;
-}) {
-  const views: Array<{ label: string; value: BubbleMapView }> = [
-    { label: "All", value: "all" },
-    { label: "Clusters", value: "clusters" },
-    { label: "Risk", value: "risk" },
-    { label: "Whales", value: "whales" },
-  ];
-
-  return (
-    <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
-      <div className="flex rounded-xl border border-white/10 bg-black/38 p-1 backdrop-blur-xl">
-        {views.map((view) => (
-          <button
-            key={view.value}
-            type="button"
-            onClick={() => onViewChange(view.value)}
-            className={`rounded-lg px-3 py-1.5 text-[11px] font-medium transition ${
-              selectedView === view.value
-                ? "bg-cyan-100/[0.12] text-cyan-50/78"
-                : "text-white/38 hover:text-white/62"
-            }`}
-          >
-            {view.label}
-          </button>
-        ))}
-      </div>
-      <button
-        type="button"
-        onClick={onToggleLines}
-        className={`rounded-xl border px-3 py-2 text-[11px] font-medium transition ${
-          showLines
-            ? "border-cyan-100/14 bg-cyan-100/[0.055] text-cyan-100/64"
-            : "border-white/10 bg-white/[0.025] text-white/38"
-        }`}
-      >
-        Lines {showLines ? "On" : "Off"}
-      </button>
-      <button
-        type="button"
-        onClick={onToggleLabels}
-        className={`rounded-xl border px-3 py-2 text-[11px] font-medium transition ${
-          showLabels
-            ? "border-cyan-100/14 bg-cyan-100/[0.055] text-cyan-100/64"
-            : "border-white/10 bg-white/[0.025] text-white/38"
-        }`}
-      >
-        Labels {showLabels ? "On" : "Off"}
-      </button>
+      <p className="text-xs leading-relaxed text-white/30">
+        Only observed holders and inferred relationships are shown. NovaOS does
+        not invent wallets, ownership, or common-control relationships.
+      </p>
     </div>
   );
 }
 
 function BubbleNodeDrawer({
   node,
-  token,
 }: {
   node: BubbleGraphNode | null;
-  token: string;
 }) {
   const [copied, setCopied] = useState(false);
   if (!node) {
     return (
-      <div className="rounded-2xl border border-white/10 bg-[#06080c]/90 p-5">
+      <div className="rounded-2xl border border-white/10 bg-[#06080c]/75 p-5">
         <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/42">
-          Wallet Intelligence Drawer
+          Wallet Detail
         </p>
         <p className="mt-4 text-sm leading-relaxed text-white/40">
-          Select a real holder node to inspect its wallet contribution.
+          Select a bubble to inspect factual wallet-level evidence.
         </p>
       </div>
     );
   }
 
   const activeNode = node;
-  const explanation = buildBubbleNodeExplanation(activeNode, token);
   const primaryCluster = activeNode.clusterLabels[0];
   function copyAddress() {
     void navigator.clipboard.writeText(activeNode.address);
@@ -7365,16 +7467,16 @@ function BubbleNodeDrawer({
 
       <div className="mt-4 grid grid-cols-2 gap-2">
         <ForensicFact label="Ownership" value={activeNode.ownershipText} />
-        <ForensicFact label="Balance" value={activeNode.balance || "Unavailable"} />
-        <ForensicFact label="Behavior" value={activeNode.behaviorClass || "Unavailable"} />
+        <ForensicFact label="Balance" value={activeNode.balance || "\u2014"} />
+        <ForensicFact label="USD value" value={"\u2014"} />
+        <ForensicFact label="Behavior" value={activeNode.behaviorClass || "\u2014"} />
         <ForensicFact
           label="Personality"
-          value={activeNode.personality?.personalityType || "Unavailable"}
+          value={activeNode.personality?.personalityType || "\u2014"}
         />
-        <ForensicFact label="Activity" value={formatBubbleMetric(activeNode.activityScore)} />
-        <ForensicFact label="Dormancy" value={formatBubbleMetric(activeNode.dormancyScore)} />
-        <ForensicFact label="Concentration" value={formatBubbleMetric(activeNode.concentrationScore)} />
-        <ForensicFact label="Reliability" value={formatBubbleMetric(activeNode.reliability)} />
+        <ForensicFact label="Activity score" value={formatBubbleMetric(activeNode.activityScore)} />
+        <ForensicFact label="Concentration score" value={formatBubbleMetric(activeNode.concentrationScore)} />
+        <ForensicFact label="Reliability score" value={formatBubbleMetric(activeNode.reliability)} />
         <ForensicFact label="Relationships" value={activeNode.clusterCount} />
         <ForensicFact
           label="Conviction contribution"
@@ -7384,15 +7486,6 @@ function BubbleNodeDrawer({
           label="Risk contribution"
           value={formatBubbleMetric(activeNode.riskContribution)}
         />
-      </div>
-
-      <div className="mt-4 rounded-2xl border border-cyan-100/10 bg-cyan-100/[0.025] p-4">
-        <p className="text-[10px] uppercase tracking-[0.2em] text-cyan-100/48">
-          Why this wallet matters
-        </p>
-        <p className="mt-2 text-sm leading-relaxed text-white/48">
-          {explanation}
-        </p>
       </div>
 
       <p className="mt-4 text-xs leading-relaxed text-white/30">
@@ -7406,7 +7499,7 @@ function BubbleNodeDrawer({
 function formatBubbleMetric(value?: number | null) {
   return typeof value === "number" && Number.isFinite(value)
     ? `${Math.round(value)}/100`
-    : "Unavailable";
+    : "\u2014";
 }
 
 function BubbleEcosystemSummary({
@@ -7427,7 +7520,7 @@ function BubbleEcosystemSummary({
       <BubbleSummaryMetric label="Cluster Groups" value={clusterGroups} />
       <BubbleSummaryMetric
         label="Avg Confidence"
-        value={typeof averageConfidence === "number" ? averageConfidence : "—"}
+        value={typeof averageConfidence === "number" ? averageConfidence : "\u2014"}
       />
     </section>
   );
@@ -8049,63 +8142,16 @@ function deriveClusterLabel(
   return "";
 }
 
-function buildBubbleNodeExplanation(node: BubbleGraphNode, token: string) {
-  const parts: string[] = [];
-  if (node.rank <= 5 || node.ownership >= 1) {
-    parts.push(
-      `This wallet is one of the highest observed ${token} holders and materially affects concentration.`
-    );
-  } else {
-    parts.push(`This wallet controls ${node.ownershipText} of observed ${token} supply.`);
-  }
-
-  if (node.relationshipGroupIds.length > 0) {
-    parts.push("It is grouped with other wallets by available cluster inference.");
-  } else {
-    parts.push("It currently appears isolated from detected relationship groups.");
-  }
-
-  if (!node.activityScore && !node.reliability && !node.personality) {
-    parts.push("Behavioral metadata is limited, so confidence is lower.");
-  } else if (node.riskContribution >= 70) {
-    parts.push("Its available metrics add elevated structural risk contribution.");
-  } else if (node.convictionContribution >= 65) {
-    parts.push("Its available metrics add stronger conviction contribution than risk pressure.");
-  }
-
-  return parts.join(" ");
-}
-
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-type ArenaDivergenceModel = {
-  label: string;
-  explanation: string;
-};
-
-type ArenaEvidenceModel = {
-  strongestSupport: string;
-  mainPressure: string;
-  supports: string[];
-  risks: string[];
-};
-
-type ArenaAiStanceModel = {
-  stance: ArenaStance | null;
-  confidence: ArenaStanceConfidence;
-  explanation: string;
-};
-
 function AIHumanArenaMvpSection({
   behaviorPreview,
-  behaviorPreviewError,
   conviction,
   convictionError,
   convictionLoadState,
   formulaV3,
-  holderError,
   holderLoadState,
   personalities,
   tokenData,
@@ -8129,49 +8175,43 @@ function AIHumanArenaMvpSection({
 }) {
   const tokenKey = arenaTokenStorageKey(tokenData);
   const [arenaRevision, setArenaRevision] = useState(0);
-  const [draft, setDraft] = useState<{
-    confidence: number;
-    note: string;
-    stance: ArenaStance | null;
-    timeframe: ArenaTimeframe;
+  const [now, setNow] = useState(() => new Date());
+  const [selectedTimeframe, setSelectedTimeframe] =
+    useState<NovaArenaTimeframe>("24H");
+  const [pendingVote, setPendingVote] = useState<{
+    arenaWindowId: string;
     tokenKey: string;
+    timeframe: NovaArenaTimeframe;
+    vote: ArenaVote;
   } | null>(null);
   const hasToken = Boolean(tokenData.tokenAddress);
+  const selectedWindow =
+    selectedTimeframe === "24H" ? getDailyArenaWindow(now) : getWeeklyArenaWindow(now);
+  const progress = getArenaProgress(selectedWindow, now);
+  const timeRemaining = getTimeRemaining(selectedWindow, now);
   const entries = readArenaEntries();
   void arenaRevision;
-  const tokenEntries = tokenKey ? entries[tokenKey] || [] : [];
-  const migratedDraft = tokenKey ? readArenaV1Draft(tokenKey) : null;
-  const activeDraft = draft?.tokenKey === tokenKey ? draft : null;
-  const selectedTimeframe = activeDraft?.timeframe || "7d";
-  const savedEntry = tokenEntries.find(
-    (entry) => entry.timeframe === selectedTimeframe
+  const tokenEntries = tokenKey
+    ? entries.filter(
+        (entry) =>
+          arenaEntryTokenKey(entry) === tokenKey &&
+          entry.timeframe === selectedTimeframe
+      )
+    : [];
+  const currentWindowEntries = tokenEntries.filter(
+    (entry) => entry.arenaWindowId === selectedWindow.arenaWindowId
   );
-  const humanStance =
-    activeDraft?.stance ?? savedEntry?.humanStance ?? migratedDraft?.stance ?? null;
-  const humanConfidence =
-    activeDraft?.confidence ??
-    savedEntry?.humanConfidence ??
-    migratedDraft?.confidence ??
-    50;
-  const humanNote =
-    activeDraft?.note ?? savedEntry?.humanNote ?? migratedDraft?.note ?? "";
+  const currentUserEntry = currentWindowEntries[0] || null;
+  const activePendingVote =
+    pendingVote?.tokenKey === tokenKey &&
+    pendingVote.timeframe === selectedTimeframe &&
+    pendingVote.arenaWindowId === selectedWindow.arenaWindowId
+      ? pendingVote.vote
+      : null;
   const aiConvictionScore =
     conviction
       ? Math.round(formulaV3?.finalConvictionScoreV3 ?? conviction.finalConvictionScore)
       : null;
-  const signalBoard = conviction
-    ? buildSignalBoardModel({
-        behaviorPreview,
-        behaviorPreviewError,
-        conviction,
-        convictionError,
-        holderError,
-        holderLoadState,
-        tokenIntelligence,
-        unifiedAnalysis,
-        walletRows,
-      })
-    : null;
   const flowModel = conviction
     ? buildWalletFlowModel({
         behaviorPreview,
@@ -8183,163 +8223,152 @@ function AIHumanArenaMvpSection({
         walletRows,
       })
     : null;
-  const arenaEvidence = buildArenaEvidence({
-    conviction,
-    flowVerdict: flowModel?.verdictTitle,
-    signalVerdict: signalBoard?.verdict,
-  });
-  const aiStance = buildAiArenaStance({
-    conviction,
-    flowVerdict: flowModel?.verdictTitle,
-    mainPressure: arenaEvidence.mainPressure,
-    primaryScore: aiConvictionScore,
-    strongestSupport: arenaEvidence.strongestSupport,
-  });
-  const outcomeStatus = savedEntry
-    ? arenaOutcomeStatus(savedEntry)
-    : ("pending" as ArenaOutcomeStatus);
-  const divergence = buildStanceDivergence({
-    aiStance: aiStance.stance,
-    humanStance,
-  });
+  const novaStance = conviction
+    ? deriveNovaArenaStance({
+        convictionScore: aiConvictionScore,
+        dataConfidence: conviction.dataConfidence.score,
+        holderQuality: conviction.subScores.walletQuality,
+        insiderRisk: conviction.subScores.insiderRisk,
+        marketIntegrity: averageDefined([
+          conviction.subScores.liquidityTrust,
+          conviction.subScores.marketMomentum,
+        ]),
+        structuralSafety: conviction.subScores.riskProtection,
+        walletFlow: flowModel?.dominantFlow,
+      })
+    : ({
+        stance: "Pending",
+        reason: "Conviction score is unavailable.",
+      } satisfies NovaArenaStanceResult);
+  const publishedCurrentEntry = currentWindowEntries.find(
+    (entry) => entry.aiPublishedStance
+  );
+  const voteDistribution = buildArenaVoteDistribution(currentWindowEntries);
+  const latestResolvedEntry = tokenEntries
+    .filter((entry) => entry.resultStatus === "Resolved" && entry.winner)
+    .sort(
+      (a, b) =>
+        Date.parse(b.resolvedAt || b.submittedAt) -
+        Date.parse(a.resolvedAt || a.submittedAt)
+    )[0];
 
-  function updateDraft(update: {
-    confidence?: number;
-    note?: string;
-    stance?: ArenaStance | null;
-    timeframe?: ArenaTimeframe;
-  }) {
-    if (!tokenKey) return;
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
 
-    setDraft({
+  useEffect(() => {
+    if (!tokenKey || !conviction || aiConvictionScore === null) return;
+
+    const published = publishClosedArenaEntries({
+      entryKey: tokenKey,
+      score: aiConvictionScore,
+      stance: novaStance.stance,
+      timestamp: now.toISOString(),
+    });
+
+    if (published) {
+      window.setTimeout(() => setArenaRevision((value) => value + 1), 0);
+    }
+  }, [aiConvictionScore, conviction, novaStance.stance, now, tokenKey]);
+
+  function selectPendingVote(vote: ArenaVote) {
+    if (!tokenKey || currentUserEntry || !progress.votingOpen) return;
+
+    setPendingVote({
+      arenaWindowId: selectedWindow.arenaWindowId,
       tokenKey,
-      confidence: normalizeArenaScore(update.confidence ?? humanConfidence),
-      note: update.note ?? humanNote,
-      stance: update.stance === undefined ? humanStance : update.stance,
-      timeframe: update.timeframe ?? selectedTimeframe,
+      timeframe: selectedTimeframe,
+      vote,
     });
   }
 
-  function createArenaEntry() {
-    if (!tokenKey || !tokenData.tokenAddress || !conviction || !aiStance.stance || !humanStance) {
+  function submitVote() {
+    if (
+      !tokenKey ||
+      !tokenData.tokenAddress ||
+      !progress.votingOpen ||
+      currentUserEntry ||
+      !activePendingVote
+    ) {
       return;
     }
 
     const allEntries = readArenaEntries();
-    const currentEntries = allEntries[tokenKey] || [];
-    const existing = currentEntries.find(
-      (entry) => entry.timeframe === selectedTimeframe
+    const existing = allEntries.find(
+      (entry) =>
+        arenaEntryTokenKey(entry) === tokenKey &&
+        entry.timeframe === selectedTimeframe &&
+        entry.arenaWindowId === selectedWindow.arenaWindowId
     );
-    const now = new Date().toISOString();
-    const nextEntry: ArenaEntry = {
-      id:
-        existing?.id ||
-        `${tokenKey}:${selectedTimeframe}:${now}`,
-      tokenSymbol: tokenData.symbol,
-      tokenName: tokenData.name,
-      tokenLogo: resolveTokenLogo(tokenData),
-      chain: tokenData.chain,
+    if (existing) return;
+
+    const submittedAt = new Date().toISOString();
+    const nextEntry: ArenaVoteEntry = {
+      id: `${tokenKey}:${selectedTimeframe}:${selectedWindow.arenaWindowId}`,
       tokenAddress: tokenData.tokenAddress,
-      pairAddress: tokenData.pairAddress || "",
-      createdAt: existing?.createdAt || now,
-      updatedAt: now,
-      targetResolveAt: existing?.targetResolveAt || targetResolveAt(now, selectedTimeframe),
+      tokenSymbol: tokenData.symbol,
+      chain: tokenData.chain,
       timeframe: selectedTimeframe,
-      aiStance: aiStance.stance,
-      aiStanceConfidence: aiStance.confidence,
-      aiConvictionScore: aiConvictionScore ?? Math.round(conviction.finalConvictionScore),
-      aiSupportReasons: arenaEvidence.supports,
-      aiRiskReasons: arenaEvidence.risks,
-      humanStance,
-      humanConfidence: normalizeArenaScore(humanConfidence),
-      humanNote: humanNote.trim(),
-      status: existing?.status === "resolved" ? "resolved" : "pending",
-      outcome: null,
-      winner: null,
+      arenaWindowId: selectedWindow.arenaWindowId,
+      humanVote: activePendingVote,
+      submittedAt,
+      resultStatus: "Pending",
     };
-    allEntries[tokenKey] = [
-      ...currentEntries.filter((entry) => entry.timeframe !== selectedTimeframe),
-      nextEntry,
-    ];
-    writeArenaEntries(allEntries);
-    setDraft({
-      tokenKey,
-      confidence: nextEntry.humanConfidence,
-      note: nextEntry.humanNote,
-      stance: nextEntry.humanStance,
-      timeframe: nextEntry.timeframe,
-    });
+    writeArenaEntries([...allEntries, nextEntry]);
+    setPendingVote(null);
     setArenaRevision((value) => value + 1);
   }
 
   if (!hasToken) {
     return (
       <SectionShell
-        eyebrow="AI vs Human"
         title="AI vs Human Arena"
-        description="Compare NovaOS directional conviction stance with local human stance."
+        description="Challenge NovaOS with daily and weekly conviction calls."
       >
         <ArenaEmptyState>
-          Select a token to compare AI conviction with your human view.
+          Select a token to enter the conviction arena.
         </ArenaEmptyState>
       </SectionShell>
     );
   }
 
-  const canCreateEntry = Boolean(
-    tokenData.tokenAddress &&
-      conviction &&
-      aiStance.stance &&
-      humanStance &&
-      selectedTimeframe
-  );
-
   return (
     <SectionShell
-      eyebrow="AI vs Human"
       title="AI vs Human Arena"
-      description="Compare NovaOS directional conviction stance with local human stance."
+      description="Challenge NovaOS with daily and weekly conviction calls."
     >
-      <section className={terminalHeaderSurfaceClass}>
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_78%_8%,rgba(124,58,237,0.16),transparent_40%),radial-gradient(circle_at_18%_76%,rgba(34,211,238,0.12),transparent_34%)]" />
-        <div className="relative flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 items-center gap-4">
-            <TokenAvatar
-              logoUrl={resolveTokenLogo(tokenData)}
-              sizeClass="h-14 w-14"
-              token={tokenData.symbol}
-            />
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="truncate text-2xl font-semibold tracking-[-0.05em] text-white/90">
-                  {tokenData.symbol} directional arena
-                </h3>
-                <TerminalBadge tone="purple">Local MVP</TerminalBadge>
-              </div>
-              <p className="mt-1 text-sm text-white/42">
-                AI and human conviction are being recorded for future verification.
-              </p>
-            </div>
+      <section className="grid gap-4 xl:grid-cols-[0.78fr_1.22fr]">
+        <div className={terminalSurfaceClass + " p-5"}>
+          <ArenaSectionTitle title="Arena" />
+          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            {(["24H", "7D"] as const).map((timeframe) => (
+              <button
+                key={timeframe}
+                type="button"
+                onClick={() => setSelectedTimeframe(timeframe)}
+                className={`rounded-2xl border px-4 py-3 text-sm font-medium transition ${
+                  selectedTimeframe === timeframe
+                    ? "border-cyan-100/24 bg-cyan-100/[0.08] text-cyan-50/82 shadow-[0_0_24px_rgba(103,232,249,0.12)]"
+                    : "border-white/10 bg-black/20 text-white/44 hover:text-white/68"
+                }`}
+              >
+                {timeframe} Arena
+              </button>
+            ))}
           </div>
-          <div className="grid gap-2 sm:grid-cols-4 lg:min-w-[560px]">
-            <ArenaMetricCard
-              label="AI Stance"
-              stance={aiStance.stance}
-              value={formatArenaStance(aiStance.stance)}
-            />
-            <ArenaMetricCard
-              label="Human Stance"
-              stance={humanStance}
-              value={formatArenaStance(humanStance)}
-            />
-            <ArenaMetricCard label="Timeframe" value={selectedTimeframe.toUpperCase()} />
-            <ArenaMetricCard
-              label="Outcome"
-              value={formatOutcomeStatus(outcomeStatus)}
-              tone="warning"
-            />
-          </div>
+          <p className="mt-4 text-xs leading-relaxed text-white/42">
+            Each token has separate daily and weekly arenas. Human votes are
+            collected before the UTC close. NovaOS locks its stance at the close
+            time. Outcomes remain pending until reliable resolution data is available.
+          </p>
         </div>
+
+        <ArenaCountdownCard
+          progressPercent={progress.progressPercent}
+          timeRemainingLabel={timeRemaining.timeRemainingLabel}
+          window={selectedWindow}
+        />
       </section>
 
       {convictionLoadState === "loading" && (
@@ -8352,411 +8381,130 @@ function AIHumanArenaMvpSection({
         </ArenaEmptyState>
       )}
 
-      <section className={terminalSurfaceClass + " p-5"}>
-        <ArenaSectionTitle title="Arena Summary" />
-        <div className="mt-4 grid gap-4 lg:grid-cols-[0.36fr_1fr] lg:items-center">
-          <div className="rounded-[1.5rem] border border-white/10 bg-black/25 p-5 text-center">
-            <p className="text-xs uppercase tracking-[0.18em] text-white/34">
-              Divergence
-            </p>
-            <p className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-white/90">
-              {divergence.label}
-            </p>
-          </div>
-          <p className="text-sm leading-relaxed text-white/52">
-            {divergence.explanation}
-          </p>
-        </div>
-      </section>
-
-      <section className="grid gap-4 xl:grid-cols-[0.98fr_1.02fr]">
+      <section className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
         <div className={terminalSurfaceClass + " p-5"}>
-          <ArenaSectionTitle title="AI Directional Conviction" />
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <ArenaFact
-              label="AI stance"
-              value={formatArenaStance(aiStance.stance)}
-            />
-            <ArenaFact
-              label="Final conviction"
-              value={formatArenaScore(aiConvictionScore ?? undefined)}
-            />
-            <ArenaFact label="Stance confidence" value={aiStance.confidence} />
-            <ArenaFact
-              label="Strongest support"
-              value={arenaEvidence.strongestSupport}
-            />
-            <ArenaFact label="Main pressure" value={arenaEvidence.mainPressure} />
-            <ArenaFact
-              label="Data confidence"
-              value={
-                conviction
-                  ? `${conviction.dataConfidence.label} ${Math.round(
-                      conviction.dataConfidence.score
-                    )}/100`
-                  : "Unavailable"
-              }
-            />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <ArenaSectionTitle title="Human Vote" />
+            <ArenaChip>
+              {currentUserEntry
+                ? "Vote locked"
+                : activePendingVote
+                  ? "Ready to submit"
+                : progress.votingOpen
+                  ? "Voting open"
+                  : "Voting closed"}
+            </ArenaChip>
           </div>
-          <p className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-3 text-sm leading-relaxed text-white/48">
-            {aiStance.explanation}
-          </p>
-        </div>
-
-        <div className={terminalSurfaceClass + " p-5"}>
-          <ArenaSectionTitle title="Local Human Stance" />
-          <div className="mt-4 space-y-4">
-            <div className="grid gap-2 sm:grid-cols-3">
-              {(["bullish", "accumulate", "bearish"] as const).map((stance) => (
-                <button
-                  key={stance}
-                  type="button"
-                  onClick={() => updateDraft({ stance })}
-                  className={`rounded-2xl border px-3 py-3 text-sm font-medium transition ${arenaStanceButtonClass(
-                    stance,
-                    humanStance === stance
-                  )}`}
-                >
-                  {formatArenaStance(stance)}
-                </button>
-              ))}
-            </div>
-            <div>
-              <p className="mb-2 text-xs uppercase tracking-[0.16em] text-white/34">
-                Timeframe
-              </p>
-              <div className="grid gap-2 sm:grid-cols-4">
-                {(["24h", "7d", "30d"] as const).map((timeframe) => (
-                  <button
-                    key={timeframe}
-                    type="button"
-                    onClick={() => updateDraft({ timeframe })}
-                    className={`rounded-2xl border px-3 py-2 text-xs transition ${
-                      selectedTimeframe === timeframe
-                        ? "border-cyan-100/24 bg-cyan-100/[0.08] text-cyan-50/78"
-                        : "border-white/10 bg-black/20 text-white/42 hover:text-white/64"
-                    }`}
-                  >
-                    {timeframe.toUpperCase()}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  disabled
-                  className="rounded-2xl border border-white/8 bg-white/[0.015] px-3 py-2 text-xs text-white/22"
-                >
-                  Custom planned
-                </button>
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm text-white/54">Human confidence</span>
-                <span className="font-mono text-xl text-white/84">{humanConfidence}</span>
-              </div>
-              <input
-                className="mt-3 h-2 w-full accent-cyan-200"
-                max={100}
-                min={0}
-                onChange={(event) =>
-                  updateDraft({ confidence: Number(event.target.value) })
-                }
-                type="range"
-                value={humanConfidence}
-              />
-            </div>
-            <textarea
-              className="min-h-[92px] w-full resize-none rounded-2xl border border-white/10 bg-black/25 p-3 text-sm text-white/78 outline-none placeholder:text-white/28 focus:border-cyan-100/24"
-              maxLength={240}
-              onChange={(event) => updateDraft({ note: event.target.value })}
-              placeholder="Optional local note"
-              value={humanNote}
-            />
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-xs text-white/34">
-                {savedEntry
-                  ? `Entry updated ${formatArenaTimestamp(savedEntry.updatedAt)}`
-                  : "No human stance saved yet."}
-              </p>
+          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+            {(["Bullish", "Accumulate", "Bearish"] as const).map((vote) => (
               <button
+                key={vote}
                 type="button"
-                disabled={!canCreateEntry}
-                onClick={createArenaEntry}
-                className="rounded-full border border-cyan-100/18 bg-cyan-100/[0.08] px-4 py-2 text-xs font-medium text-cyan-50/78 transition hover:bg-cyan-100/[0.12] disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/[0.02] disabled:text-white/28"
+                disabled={!progress.votingOpen || Boolean(currentUserEntry)}
+                onClick={() => selectPendingVote(vote)}
+                className={`rounded-2xl border px-3 py-3 text-sm font-medium transition ${arenaVoteButtonClass(
+                  vote,
+                  (currentUserEntry?.humanVote || activePendingVote) === vote
+                )} disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/[0.02] disabled:text-white/24`}
               >
-                Create Arena Entry
+                {vote}
               </button>
-            </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-white/42">
+            {currentUserEntry
+              ? "Vote locked for this arena window."
+              : !progress.votingOpen
+                ? "Voting closed for this arena window."
+                : activePendingVote
+                  ? `Ready to submit: ${activePendingVote}.`
+                  : "Choose your stance for this arena window."}
+          </p>
+          <button
+            type="button"
+            disabled={!activePendingVote || Boolean(currentUserEntry) || !progress.votingOpen}
+            onClick={submitVote}
+            className="mt-4 rounded-full border border-cyan-100/18 bg-cyan-100/[0.08] px-4 py-2 text-xs font-medium text-cyan-50/78 transition hover:bg-cyan-100/[0.12] disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/[0.02] disabled:text-white/28"
+          >
+            Submit Vote
+          </button>
+        </div>
+
+        <div className={terminalSurfaceClass + " p-5"}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <ArenaSectionTitle title="Vote Distribution" />
+            <ArenaChip>{voteDistribution.totalLabel}</ArenaChip>
+          </div>
+          <div className="mt-4 space-y-3">
+            {(["Bullish", "Accumulate", "Bearish"] as const).map((vote) => (
+              <ArenaDistributionBar
+                key={vote}
+                label={vote}
+                percent={voteDistribution.percentages[vote]}
+                tone={vote}
+              />
+            ))}
+          </div>
+          {voteDistribution.totalVotes === 0 && (
+            <p className="mt-3 text-xs text-white/34">No local votes yet.</p>
+          )}
+          <div className="mt-4">
+            <ArenaFact label="Human consensus" value={voteDistribution.consensus} />
           </div>
         </div>
       </section>
 
       <section className="grid gap-4 xl:grid-cols-2">
-        <ArenaEvidenceCard
-          title="NovaOS Sees"
-          primaryTitle="Support reasons"
-          primaryItems={arenaEvidence.supports}
-          secondaryTitle="Risk reasons"
-          secondaryItems={arenaEvidence.risks}
-        />
         <div className={terminalSurfaceClass + " p-5"}>
-          <ArenaSectionTitle title="Human Says" />
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <ArenaFact
-              label="Saved stance"
-              value={formatArenaStance(savedEntry?.humanStance || null)}
-            />
-            <ArenaFact
-              label="Confidence"
-              value={savedEntry ? `${savedEntry.humanConfidence}/100` : "Unavailable"}
-            />
-            <ArenaFact
-              label="Timeframe"
-              value={savedEntry?.timeframe.toUpperCase() || selectedTimeframe.toUpperCase()}
-            />
-            <ArenaFact
-              label="Saved time"
-              value={savedEntry ? formatArenaTimestamp(savedEntry.updatedAt) : "Unavailable"}
-            />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <ArenaSectionTitle title="NovaOS Stance" />
+            <ArenaChip>
+              {publishedCurrentEntry
+                ? "Locked"
+                : `Locks at ${formatUtcTime(selectedWindow.closesAt)}`}
+            </ArenaChip>
           </div>
-          <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3">
+          <div
+            className={`mt-4 rounded-2xl border p-4 ${arenaPublishedSurfaceClass(
+              publishedCurrentEntry?.aiPublishedStance || novaStance.stance
+            )}`}
+          >
             <p className="text-xs uppercase tracking-[0.16em] text-white/34">
-              Note
+              {publishedCurrentEntry ? "Published stance" : "Current model lean"}
             </p>
-            <p className="mt-2 text-sm leading-relaxed text-white/52">
-              {savedEntry?.humanNote || "no note provided"}
+            <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-white/90">
+              {publishedCurrentEntry?.aiPublishedStance || novaStance.stance}
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-white/46">
+              {publishedCurrentEntry
+                ? "Local lock recorded after the UTC close."
+                : "Indicative, not locked."}
+            </p>
+          </div>
+          <p className="mt-3 text-sm leading-relaxed text-white/50">
+            {novaStance.reason}
+          </p>
+        </div>
+
+        <div className={terminalSurfaceClass + " p-5"}>
+          <ArenaSectionTitle title="Latest Result" />
+          <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+            <p className="text-xs uppercase tracking-[0.16em] text-white/34">
+              Settlement
+            </p>
+            <p className="mt-2 text-xl font-semibold tracking-[-0.04em] text-white/86">
+              {latestResolvedEntry?.winner
+                ? `Latest winner: ${latestResolvedEntry.winner}`
+                : "Awaiting first settlement."}
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-white/42">
+              Outcomes remain pending until reliable resolution data is available.
             </p>
           </div>
         </div>
-      </section>
-
-      <section className={terminalSurfaceClass + " p-5"}>
-        <ArenaSectionTitle title="Outcome Tracking" />
-        <div className="mt-4 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
-          <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-            <ArenaFact
-              label="Status"
-              value={formatOutcomeStatus(savedEntry ? arenaOutcomeStatus(savedEntry) : "pending")}
-            />
-            <p className="mt-3 text-sm leading-relaxed text-white/44">
-              {savedEntry
-                ? outcomeTrackingCopy(savedEntry)
-                : "Create an arena entry to record a target resolution window."}
-            </p>
-          </div>
-          <ArenaList
-            title="Planned future outcome metrics"
-            items={[
-              "price direction",
-              "conviction shift",
-              "holder quality shift",
-              "distribution pressure shift",
-              "risk shift",
-            ]}
-          />
-        </div>
-      </section>
-
-      <section className={terminalMethodologyClass}>
-        AI stance is classified from NovaOS conviction, risk, wallet-flow and
-        signal data. Human stance is local user input in this MVP. Outcome
-        resolution is not automatic yet and no winner is assigned without real
-        future data.
       </section>
     </SectionShell>
   );
-}
-
-function buildArenaEvidence({
-  conviction,
-  flowVerdict,
-  signalVerdict,
-}: {
-  conviction: ExplainableConvictionData | null;
-  flowVerdict?: string;
-  signalVerdict?: string;
-}): ArenaEvidenceModel {
-  if (!conviction) {
-    return {
-      strongestSupport: "Unavailable",
-      mainPressure: "Unavailable",
-      supports: ["Analyze a token first to generate AI conviction."],
-      risks: ["AI conviction is unavailable."],
-    };
-  }
-
-  const coreScores = [
-    ["Holder Integrity", conviction.subScores.holderIntegrity],
-    ["Wallet Quality", conviction.subScores.walletQuality],
-    ["Behavior Stability", conviction.subScores.behaviorStability],
-    ["Liquidity Trust", conviction.subScores.liquidityTrust],
-    ["Market Momentum", conviction.subScores.marketMomentum],
-    ["Risk Protection", conviction.subScores.riskProtection],
-  ] as const;
-  const riskScores = [
-    { label: "Insider Risk", score: conviction.subScores.insiderRisk },
-    { label: "Bundle Risk", score: conviction.bundleDetection?.bundleRiskScore },
-    { label: "Cluster Risk", score: conviction.subScores.clusterRisk },
-    { label: "Bot Activity Risk", score: conviction.subScores.botActivityRisk },
-    { label: "Rotation Risk", score: conviction.subScores.rotationRisk },
-    { label: "Fresh Wallet Risk", score: conviction.subScores.freshWalletRisk },
-  ];
-  const strongest = [...coreScores].sort((a, b) => b[1] - a[1])[0];
-  const pressure = riskScores
-    .filter((entry) => typeof entry.score === "number")
-    .sort((a, b) => (b.score || 0) - (a.score || 0))[0];
-  const supports = uniqueArenaItems([
-    `${strongest[0]} is ${Math.round(strongest[1])}/100.`,
-    ...safeStringArray(conviction.explanation?.positives),
-    signalVerdict ? `Signals summary: ${signalVerdict}.` : "",
-    flowVerdict ? `Wallet flow summary: ${flowVerdict}.` : "",
-  ]).slice(0, 3);
-  const risks = uniqueArenaItems([
-    pressure ? `${pressure.label} is ${Math.round(pressure.score || 0)}/100.` : "",
-    ...safeStringArray(conviction.explanation?.negatives),
-    ...safeStringArray(conviction.explanation?.riskNotes),
-    conviction.deepBehavior?.enabled ? "" : "Deep behavior is unavailable.",
-  ]).slice(0, 3);
-
-  return {
-    strongestSupport: `${strongest[0]} ${Math.round(strongest[1])}/100`,
-    mainPressure: pressure
-      ? `${pressure.label} ${Math.round(pressure.score || 0)}/100`
-      : "Unavailable",
-    supports: supports.length ? supports : ["No support reason surfaced."],
-    risks: risks.length ? risks : ["No caution reason surfaced."],
-  };
-}
-
-function buildAiArenaStance({
-  conviction,
-  flowVerdict,
-  mainPressure,
-  primaryScore,
-  strongestSupport,
-}: {
-  conviction: ExplainableConvictionData | null;
-  flowVerdict?: string;
-  mainPressure: string;
-  primaryScore: number | null;
-  strongestSupport: string;
-}): ArenaAiStanceModel {
-  if (!conviction) {
-    return {
-      stance: null,
-      confidence: "Low",
-      explanation: "Analyze a token first to generate AI directional stance.",
-    };
-  }
-
-  const score = primaryScore ?? conviction.finalConvictionScore;
-  const dataConfidence = conviction.dataConfidence.label;
-  const riskProtection = conviction.subScores.riskProtection;
-  const insiderRisk = conviction.subScores.insiderRisk;
-  const bundleRisk = conviction.bundleDetection?.bundleRiskScore ?? 0;
-  const clusterRisk = conviction.subScores.clusterRisk;
-  const rotationRisk = conviction.subScores.rotationRisk;
-  const flow = (flowVerdict || "").toLowerCase();
-  const accumulationDominant = flow.includes("accumulation");
-  const distributionDominant = flow.includes("distribution");
-  const criticalRisk =
-    insiderRisk >= 85 ||
-    bundleRisk >= 85 ||
-    clusterRisk >= 85 ||
-    rotationRisk >= 85 ||
-    riskProtection < 35;
-  const bullish =
-    (score >= 70 &&
-      riskProtection >= 60 &&
-      insiderRisk < 70 &&
-      bundleRisk < 70 &&
-      dataConfidence !== "Low") ||
-    (score >= 65 && accumulationDominant && !criticalRisk);
-  const bearish =
-    score < 40 ||
-    insiderRisk >= 85 ||
-    bundleRisk >= 85 ||
-    riskProtection < 35 ||
-    (distributionDominant && score < 60);
-  const stance: ArenaStance = bearish ? "bearish" : bullish ? "bullish" : "accumulate";
-  const confidence = aiStanceConfidence({
-    criticalRisk,
-    dataConfidence,
-    score,
-    stance,
-  });
-
-  return {
-    stance,
-    confidence,
-    explanation: `NovaOS classifies current on-chain structure as ${formatArenaStance(
-      stance
-    )} because conviction is ${Math.round(score)}/100, ${strongestSupport.toLowerCase()} is the strongest support, and ${mainPressure.toLowerCase()} is the main pressure.`,
-  };
-}
-
-function aiStanceConfidence({
-  criticalRisk,
-  dataConfidence,
-  score,
-  stance,
-}: {
-  criticalRisk: boolean;
-  dataConfidence: ExplainableConvictionData["dataConfidence"]["label"];
-  score: number;
-  stance: ArenaStance;
-}): ArenaStanceConfidence {
-  if (dataConfidence === "Low") return "Low";
-  if (stance === "bullish" && score >= 75 && dataConfidence === "High") return "High";
-  if (stance === "bearish" && (score < 35 || criticalRisk)) return "High";
-  if (stance === "accumulate" && score >= 45 && score < 70) return "Medium";
-  return dataConfidence === "High" ? "Medium" : "Low";
-}
-
-function buildStanceDivergence({
-  aiStance,
-  humanStance,
-}: {
-  aiStance: ArenaStance | null;
-  humanStance: ArenaStance | null;
-}): ArenaDivergenceModel {
-  if (!aiStance) {
-    return {
-      label: "Insufficient data",
-      explanation: "Analyze a token first to generate AI directional stance.",
-    };
-  }
-
-  if (!humanStance) {
-    return {
-      label: "Pending",
-      explanation: "Save a human stance to compare against NovaOS conviction.",
-    };
-  }
-
-  if (aiStance === humanStance) {
-    return {
-      label: "Aligned",
-      explanation: "Human stance and NovaOS directional conviction stance are aligned.",
-    };
-  }
-
-  if (
-    (aiStance === "bullish" && humanStance === "bearish") ||
-    (aiStance === "bearish" && humanStance === "bullish")
-  ) {
-    return {
-      label: "High divergence",
-      explanation:
-        "AI and human stances are directionally opposed. No winner is assigned until real future outcome data exists.",
-    };
-  }
-
-  return {
-    label: "Moderate divergence",
-    explanation:
-      "One stance is directional while the other is accumulate. This records a difference in conviction intensity, not correctness.",
-  };
 }
 
 function arenaTokenStorageKey(tokenData: TokenResult) {
@@ -8765,27 +8513,32 @@ function arenaTokenStorageKey(tokenData: TokenResult) {
   return [
     tokenData.chain,
     tokenData.tokenAddress,
-    tokenData.pairAddress || "no-pair",
-    tokenData.rawSymbol || tokenData.symbol,
   ]
     .join(":")
     .toLowerCase();
 }
 
-function readArenaEntries(): Record<string, ArenaEntry[]> {
-  if (typeof window === "undefined") return {};
+function arenaEntryTokenKey(entry: ArenaVoteEntry) {
+  return [entry.chain, entry.tokenAddress].join(":").toLowerCase();
+}
+
+function readArenaEntries(): ArenaVoteEntry[] {
+  if (typeof window === "undefined") return [];
 
   try {
     const raw = window.localStorage.getItem(AI_HUMAN_ARENA_STORAGE_KEY);
-    if (!raw) return {};
+    if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
+
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed.filter(isArenaVoteEntry);
   } catch {
-    return {};
+    return [];
   }
 }
 
-function writeArenaEntries(entries: Record<string, ArenaEntry[]>) {
+function writeArenaEntries(entries: ArenaVoteEntry[]) {
   if (typeof window === "undefined") return;
 
   try {
@@ -8798,121 +8551,149 @@ function writeArenaEntries(entries: Record<string, ArenaEntry[]>) {
   }
 }
 
-function readArenaV1Draft(tokenKey: string): {
-  confidence: number;
-  note: string;
-  stance: ArenaStance;
-} | null {
-  if (typeof window === "undefined") return null;
+function isArenaVoteEntry(value: unknown): value is ArenaVoteEntry {
+  const entry = value as Partial<ArenaVoteEntry>;
 
-  try {
-    const raw = window.localStorage.getItem(AI_HUMAN_ARENA_V1_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Record<string, HumanArenaView>;
-    const view = parsed?.[tokenKey];
-
-    if (typeof view?.humanScore !== "number") return null;
-
-    return {
-      confidence: normalizeArenaScore(view.humanScore),
-      note: view.note || "",
-      stance:
-        view.humanScore >= 65
-          ? "bullish"
-          : view.humanScore <= 35
-          ? "bearish"
-          : "accumulate",
-    };
-  } catch {
-    return null;
-  }
-}
-
-function normalizeArenaScore(value: number) {
-  if (!Number.isFinite(value)) return 50;
-  return Math.max(0, Math.min(100, Math.round(value)));
-}
-
-function formatArenaScore(value?: number) {
-  return typeof value === "number" && Number.isFinite(value)
-    ? String(Math.round(value))
-    : "Unavailable";
-}
-
-function formatArenaStance(stance: ArenaStance | null | undefined) {
-  if (!stance) return "Pending";
-  if (stance === "bullish") return "Bullish";
-  if (stance === "bearish") return "Bearish";
-  return "Accumulate";
-}
-
-function targetResolveAt(createdAt: string, timeframe: ArenaTimeframe) {
-  const date = new Date(createdAt);
-  const hours = timeframe === "24h" ? 24 : timeframe === "7d" ? 24 * 7 : 24 * 30;
-  date.setHours(date.getHours() + hours);
-  return date.toISOString();
-}
-
-function arenaOutcomeStatus(entry: ArenaEntry): ArenaOutcomeStatus {
-  if (entry.status === "resolved") return "resolved";
-  return Date.now() >= Date.parse(entry.targetResolveAt)
-    ? "ready_for_resolution"
-    : "pending";
-}
-
-function formatOutcomeStatus(status: ArenaOutcomeStatus) {
-  if (status === "ready_for_resolution") return "Ready";
-  if (status === "resolved") return "Resolved";
-  return "Pending";
-}
-
-function outcomeTrackingCopy(entry: ArenaEntry) {
-  const status = arenaOutcomeStatus(entry);
-
-  if (status === "pending") {
-    return `Outcome pending until ${formatArenaTimestamp(entry.targetResolveAt)}.`;
-  }
-
-  if (status === "ready_for_resolution") {
-    return "Ready for resolution. Future versions will compare this entry against real market and holder outcomes.";
-  }
-
-  return "Resolved entries will display real outcome evidence when resolution logic exists.";
-}
-
-function formatArenaTimestamp(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "recently";
-  return date.toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-function uniqueArenaItems(items: string[]) {
-  return Array.from(
-    new Set(items.map((item) => item.trim()).filter(Boolean))
+  return Boolean(
+    entry &&
+      typeof entry.id === "string" &&
+      typeof entry.tokenAddress === "string" &&
+      typeof entry.tokenSymbol === "string" &&
+      typeof entry.chain === "string" &&
+      (entry.timeframe === "24H" || entry.timeframe === "7D") &&
+      typeof entry.arenaWindowId === "string" &&
+      isArenaVote(entry.humanVote) &&
+      typeof entry.submittedAt === "string" &&
+      isArenaResultStatus(entry.resultStatus)
   );
 }
 
-function arenaStanceButtonClass(stance: ArenaStance, active: boolean) {
-  const activeClasses = arenaStanceSurfaceClass(stance);
-  return active
-    ? activeClasses
-    : "border-white/10 bg-black/20 text-white/42 hover:text-white/64";
+function isArenaVote(value: unknown): value is ArenaVote {
+  return value === "Bullish" || value === "Accumulate" || value === "Bearish";
 }
 
-function arenaStanceSurfaceClass(stance: ArenaStance | null | undefined) {
-  if (stance === "bullish") {
+function isArenaResultStatus(value: unknown): value is ArenaResultStatus {
+  return value === "Pending" || value === "Awaiting Settlement" || value === "Resolved";
+}
+
+function publishClosedArenaEntries({
+  entryKey,
+  score,
+  stance,
+  timestamp,
+}: {
+  entryKey: string;
+  score: number;
+  stance: NovaArenaStance;
+  timestamp: string;
+}) {
+  const allEntries = readArenaEntries();
+  let published = false;
+  const nextEntries = allEntries.map((entry) => {
+    if (
+      arenaEntryTokenKey(entry) !== entryKey ||
+      entry.aiPublishedStance ||
+      Date.now() < arenaWindowCloseMs(entry.arenaWindowId)
+    ) {
+      return entry;
+    }
+
+    published = true;
+    return {
+      ...entry,
+      aiPublishedAt: timestamp,
+      aiPublishedScore: score,
+      aiPublishedStance: stance,
+      resultStatus:
+        entry.resultStatus === "Pending" ? "Awaiting Settlement" : entry.resultStatus,
+    };
+  });
+
+  if (published) {
+    writeArenaEntries(nextEntries);
+  }
+
+  return published;
+}
+
+function arenaWindowCloseMs(arenaWindowId: string) {
+  const [, rawId] = arenaWindowId.split(":");
+  const dateId = rawId?.replace("week-", "");
+  if (!dateId) return Number.POSITIVE_INFINITY;
+
+  const [year, month, day] = dateId.split("-").map(Number);
+  if (!year || !month || !day) return Number.POSITIVE_INFINITY;
+
+  return Date.UTC(year, month - 1, day, 23, 59, 0, 0);
+}
+
+function formatUtcTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "23:59 UTC";
+  return `${String(date.getUTCHours()).padStart(2, "0")}:${String(
+    date.getUTCMinutes()
+  ).padStart(2, "0")} UTC`;
+}
+
+function formatUtcDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unavailable";
+  return `${date.toUTCString().replace(":00 GMT", " UTC")}`;
+}
+
+function averageDefined(values: Array<number | null | undefined>) {
+  const defined = values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value)
+  );
+  if (defined.length === 0) return null;
+  return defined.reduce((total, value) => total + value, 0) / defined.length;
+}
+
+function buildArenaVoteDistribution(entries: ArenaVoteEntry[]) {
+  const counts: Record<ArenaVote, number> = {
+    Bullish: 0,
+    Accumulate: 0,
+    Bearish: 0,
+  };
+
+  entries.forEach((entry) => {
+    counts[entry.humanVote] += 1;
+  });
+
+  const totalVotes = entries.length;
+  const percentages: Record<ArenaVote, number> = {
+    Bullish: totalVotes ? Math.round((counts.Bullish / totalVotes) * 100) : 0,
+    Accumulate: totalVotes ? Math.round((counts.Accumulate / totalVotes) * 100) : 0,
+    Bearish: totalVotes ? Math.round((counts.Bearish / totalVotes) * 100) : 0,
+  };
+  const maxVotes = Math.max(counts.Bullish, counts.Accumulate, counts.Bearish);
+  const leaders = (["Bullish", "Accumulate", "Bearish"] as const).filter(
+    (vote) => counts[vote] === maxVotes && maxVotes > 0
+  );
+  const consensus =
+    totalVotes === 0 ? "Pending" : leaders.length === 1 ? leaders[0] : "Mixed";
+
+  return {
+    consensus,
+    percentages,
+    totalLabel: totalVotes === 1 ? "1 local vote" : `${totalVotes} local votes`,
+    totalVotes,
+  };
+}
+
+function arenaVoteButtonClass(vote: ArenaVote, active: boolean) {
+  if (!active) return "border-white/10 bg-black/20 text-white/42 hover:text-white/64";
+  return `${arenaPublishedSurfaceClass(vote)} shadow-[0_0_26px_rgba(103,232,249,0.12)]`;
+}
+
+function arenaPublishedSurfaceClass(stance: NovaArenaStance | ArenaVote) {
+  if (stance === "Bullish") {
     return "border-cyan-100/20 bg-cyan-100/[0.07] text-cyan-50/78";
   }
-  if (stance === "bearish") {
+  if (stance === "Bearish") {
     return "border-amber-100/20 bg-amber-100/[0.06] text-amber-50/76";
   }
-  if (stance === "accumulate") {
-    return "border-purple-100/18 bg-purple-100/[0.06] text-purple-50/76";
-  }
-  return "border-white/10 bg-white/[0.025] text-white/54";
+  return "border-purple-100/18 bg-purple-100/[0.06] text-purple-50/76";
 }
 
 function ArenaEmptyState({
@@ -8926,34 +8707,6 @@ function ArenaEmptyState({
     <div className={`${terminalSurfaceClass} p-8 text-center`}>
       <p className={tone === "error" ? "text-sm text-red-100/60" : "text-sm text-white/42"}>
         {children}
-      </p>
-    </div>
-  );
-}
-
-function ArenaMetricCard({
-  label,
-  stance,
-  tone = "default",
-  value,
-}: {
-  label: string;
-  stance?: ArenaStance | null;
-  tone?: "default" | "warning";
-  value: string;
-}) {
-  const toneClass =
-    tone === "warning"
-      ? "border-amber-100/14 bg-amber-100/[0.04]"
-      : arenaStanceSurfaceClass(stance);
-
-  return (
-    <div className={`rounded-2xl border p-3 ${toneClass}`}>
-      <p className="text-[0.64rem] uppercase tracking-[0.16em] text-white/34">
-        {label}
-      </p>
-      <p className="mt-1 text-xl font-semibold tracking-[-0.04em] text-white/86">
-        {value}
       </p>
     </div>
   );
@@ -8976,44 +8729,79 @@ function ArenaFact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ArenaEvidenceCard({
-  primaryItems,
-  primaryTitle,
-  secondaryItems,
-  secondaryTitle,
-  title,
+function ArenaChip({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-full border border-white/10 bg-white/[0.035] px-3 py-1 text-xs font-medium text-white/54">
+      {children}
+    </span>
+  );
+}
+
+function ArenaCountdownCard({
+  progressPercent,
+  timeRemainingLabel,
+  window,
 }: {
-  primaryItems: string[];
-  primaryTitle: string;
-  secondaryItems: string[];
-  secondaryTitle: string;
-  title: string;
+  progressPercent: number;
+  timeRemainingLabel: string;
+  window: ArenaWindow;
 }) {
   return (
     <div className={terminalSurfaceClass + " p-5"}>
-      <ArenaSectionTitle title={title} />
-      <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        <ArenaList title={primaryTitle} items={primaryItems} />
-        <ArenaList title={secondaryTitle} items={secondaryItems} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <ArenaSectionTitle title="Voting Window" />
+        <ArenaChip>{window.votingOpen ? "Voting open" : "Voting closed"}</ArenaChip>
+      </div>
+      <p className="mt-4 text-3xl font-semibold tracking-[-0.05em] text-white/90">
+        {timeRemainingLabel}
+      </p>
+      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/[0.06]">
+        <div
+          className="h-full rounded-full bg-cyan-100/65 shadow-[0_0_18px_rgba(103,232,249,0.24)] transition-all"
+          style={{ width: `${progressPercent}%` }}
+        />
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <ArenaFact label="Close" value={formatUtcDateTime(window.closesAt)} />
+        <ArenaFact label="Settlement" value={formatUtcDateTime(window.resolvesAt)} />
       </div>
     </div>
   );
 }
 
-function ArenaList({ items, title }: { items: string[]; title: string }) {
+function ArenaDistributionBar({
+  label,
+  percent,
+  tone,
+}: {
+  label: ArenaVote;
+  percent: number;
+  tone: ArenaVote;
+}) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
-      <p className="text-xs uppercase tracking-[0.14em] text-white/34">{title}</p>
-      <div className="mt-3 space-y-2">
-        {(items.length ? items : ["Unavailable"]).map((item) => (
-          <div key={item} className="flex gap-2 text-xs leading-relaxed">
-            <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-cyan-100/45" />
-            <span className="text-white/44">{item}</span>
-          </div>
-        ))}
+    <div>
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <span className="font-medium text-white/62">{label}</span>
+        <span className="font-mono text-white/46">{percent}%</span>
+      </div>
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/[0.055]">
+        <div
+          className={`h-full rounded-full transition-all ${arenaDistributionFillClass(tone)}`}
+          style={{ width: `${percent}%` }}
+        />
       </div>
     </div>
   );
+}
+
+function arenaDistributionFillClass(vote: ArenaVote) {
+  if (vote === "Bullish") {
+    return "bg-cyan-100/70 shadow-[0_0_16px_rgba(103,232,249,0.2)]";
+  }
+  if (vote === "Bearish") {
+    return "bg-amber-100/68 shadow-[0_0_16px_rgba(253,230,138,0.16)]";
+  }
+  return "bg-purple-100/68 shadow-[0_0_16px_rgba(216,180,254,0.16)]";
 }
 
 type FlowLabel = WalletFlowV2Result["flowDirection"];
@@ -9032,6 +8820,12 @@ type WalletFlowContributor = {
   dataQuality?: string;
 };
 
+type WalletFlowInsight = {
+  detail?: string;
+  title: string;
+  value: string;
+};
+
 type WalletFlowModel = {
   accumulationPressure?: number;
   distributionPressure?: number;
@@ -9041,16 +8835,8 @@ type WalletFlowModel = {
   confidenceScore?: number;
   confidenceLabel: string;
   dominantFlow?: string;
-  verdictTitle: string;
-  verdictCopy: string;
   contributors: WalletFlowContributor[];
-  evidence: {
-    accumulation: string[];
-    distribution: string[];
-    rotation: string[];
-    dormancy: string[];
-  };
-  notices: string[];
+  insights: WalletFlowInsight[];
   hasDeepBehavior: boolean;
   hasPartialInput: boolean;
 };
@@ -9130,7 +8916,7 @@ function WalletFlowsMvpSection({
     <div className="mx-auto max-w-[1680px] space-y-4">
       <TerminalSectionHeader
         badge="Behavioral inference only"
-        subtitle="Holder movement and token-transfer behavior from available wallet data."
+        subtitle="Wallet Flows tracks how major holders are behaving based on observed ownership, activity and holder intelligence signals."
         title="Wallet Flows"
       >
           <div className="grid gap-2 rounded-2xl border border-white/10 bg-black/22 p-3 text-xs text-white/36 sm:grid-cols-2 lg:min-w-[360px]">
@@ -9218,58 +9004,13 @@ function WalletFlowsMvpSection({
         />
       </div>
 
-      <section className="grid gap-4 xl:grid-cols-[0.78fr_1.22fr]">
-        <div className="rounded-[2rem] border border-cyan-100/10 bg-cyan-100/[0.025] p-5">
-          <p className="text-xs uppercase tracking-[0.24em] text-cyan-100/42">
-            Flow Verdict
-          </p>
-          <h2 className="mt-3 text-2xl font-semibold tracking-[-0.055em] text-white/88">
-            {flowModel.verdictTitle}
-          </h2>
-          <p className="mt-3 text-sm leading-relaxed text-white/42">
-            {flowModel.verdictCopy}
-          </p>
-          {flowModel.notices.length > 0 && (
-            <div className="mt-4 space-y-2">
-              {flowModel.notices.map((notice) => (
-                <p
-                  key={notice}
-                  className="rounded-2xl border border-white/10 bg-black/22 px-3 py-2 text-xs leading-relaxed text-white/34"
-                >
-                  {notice}
-                </p>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <TopFlowContributorsTable contributors={flowModel.contributors} />
-      </section>
-
       <section className="grid gap-3 lg:grid-cols-4">
-        <WalletFlowEvidenceCard
-          title="Accumulation Evidence"
-          rows={flowModel.evidence.accumulation}
-        />
-        <WalletFlowEvidenceCard
-          title="Distribution Evidence"
-          rows={flowModel.evidence.distribution}
-        />
-        <WalletFlowEvidenceCard
-          title="Rotation Evidence"
-          rows={flowModel.evidence.rotation}
-        />
-        <WalletFlowEvidenceCard
-          title="Dormancy Evidence"
-          rows={flowModel.evidence.dormancy}
-        />
+        {flowModel.insights.map((insight) => (
+          <WalletFlowInsightCard key={insight.title} insight={insight} />
+        ))}
       </section>
 
-      <section className={terminalMethodologyClass}>
-        Wallet Flow V2 uses available token-transfer behavior, holder
-        intelligence, wallet activity, dormancy and ownership weighting. It does
-        not calculate PnL, entry price, exit price, or future price movement.
-      </section>
+      <TopFlowContributorsTable contributors={flowModel.contributors} />
     </div>
   );
 }
@@ -9331,19 +9072,6 @@ function buildWalletFlowModel({
       }))
       .sort((a, b) => b.pressureScore - a.pressureScore)
       .slice(0, 10);
-    const verdict = deriveWalletFlowV2Verdict(tokenFlowSummaryV2);
-    const notices: string[] = [];
-
-    if (!hasDeepBehavior) {
-      notices.push("Token-transfer behavior is unavailable for some or all wallets, so V2 keeps transfer evidence missing rather than inferring it.");
-    }
-    if (hasPartialInput) {
-      notices.push("Coverage is partial. Wallet Flow V2 uses only loaded holder, reputation, profile and behavior inputs.");
-    }
-    if (tokenFlowSummaryV2.flowConfidence < 45) {
-      notices.push("Flow confidence is low, so the dominant-flow label is conservative.");
-    }
-
     return {
       accumulationPressure: tokenFlowSummaryV2.accumulationPressure,
       distributionPressure: tokenFlowSummaryV2.distributionPressure,
@@ -9353,11 +9081,13 @@ function buildWalletFlowModel({
       confidenceScore: tokenFlowSummaryV2.flowConfidence,
       confidenceLabel: scoreToConfidenceLabel(tokenFlowSummaryV2.flowConfidence),
       dominantFlow: tokenFlowSummaryV2.dominantFlow,
-      verdictTitle: verdict.title,
-      verdictCopy: verdict.copy,
       contributors,
-      evidence: buildWalletFlowV2Evidence(tokenFlowSummaryV2),
-      notices,
+      insights: buildWalletFlowInsights({
+        analyzedWallets: tokenFlowSummaryV2.analyzedWallets,
+        contributors,
+        dominantFlow: tokenFlowSummaryV2.dominantFlow,
+        netFlowBias: tokenFlowSummaryV2.netFlowBias,
+      }),
       hasDeepBehavior,
       hasPartialInput,
     };
@@ -9463,18 +9193,6 @@ function buildWalletFlowModel({
     hasDeepBehavior,
     rotationRisk,
   });
-  const notices: string[] = [];
-
-  if (!hasDeepBehavior) {
-    notices.push("Transfer-derived flow pressure is unavailable, so accumulation and distribution are not inferred.");
-  }
-  if (hasPartialInput) {
-    notices.push("Coverage is partial. Wallet labels and confidence use only loaded inputs.");
-  }
-  if (conviction?.dataConfidence.warnings.length) {
-    notices.push(conviction.dataConfidence.warnings[0]);
-  }
-
   return {
     accumulationPressure,
     distributionPressure,
@@ -9489,19 +9207,19 @@ function buildWalletFlowModel({
         ? Math.round(confidenceScore)
         : undefined,
     confidenceLabel,
-    dominantFlow: undefined,
-    verdictTitle: verdict.title,
-    verdictCopy: verdict.copy,
+    dominantFlow: hasDeepBehavior ? verdict.title : undefined,
     contributors: contributors
       .sort((a, b) => b.pressureScore - a.pressureScore)
       .slice(0, 10),
-    evidence: buildWalletFlowEvidence({
-      behaviorPreview,
-      conviction,
-      deepSummary,
-      tokenIntelligence,
+    insights: buildWalletFlowInsights({
+      analyzedWallets: walletRows.length || deepSummary?.analyzedWallets,
+      contributors,
+      dominantFlow: hasDeepBehavior ? verdict.title : undefined,
+      netFlowBias:
+        typeof accumulationPressure === "number" && typeof distributionPressure === "number"
+          ? Math.round(accumulationPressure - distributionPressure)
+          : undefined,
     }),
-    notices,
     hasDeepBehavior,
     hasPartialInput,
   };
@@ -9554,13 +9272,6 @@ function deriveWalletFlowVerdict({
   };
 }
 
-function deriveWalletFlowV2Verdict(summary: TokenFlowSummaryV2) {
-  return {
-    title: summary.dominantFlow,
-    copy: summary.verdict,
-  };
-}
-
 function deriveWalletFlowLabel({
   activityScore,
   accumulationPressure,
@@ -9592,93 +9303,58 @@ function deriveWalletFlowLabel({
   return "Unknown";
 }
 
-function buildWalletFlowV2Evidence(summary: TokenFlowSummaryV2) {
-  const accumulation = [
-    `Ownership-weighted accumulation pressure is ${summary.accumulationPressure}/100 across ${summary.analyzedWallets} analyzed wallets.`,
-    `${summary.accumulatingWallets} wallet(s) classify as accumulating from available evidence.`,
-  ];
-  const distribution = [
-    `Ownership-weighted distribution pressure is ${summary.distributionPressure}/100.`,
-    `${summary.distributingWallets} wallet(s) classify as distributing from available evidence.`,
-  ];
-  const rotation = [
-    `Ownership-weighted rotation pressure is ${summary.rotationPressure}/100.`,
-    `${summary.rotatingWallets} wallet(s) classify as rotating from available behavior and holder inputs.`,
-  ];
-  const dormancy = [
-    `Ownership-weighted dormancy pressure is ${summary.dormancyPressure}/100.`,
-    `${summary.dormantWallets} wallet(s) classify as dormant from available activity and holder inputs.`,
-  ];
-
-  return { accumulation, distribution, rotation, dormancy };
-}
-
-function buildWalletFlowEvidence({
-  behaviorPreview,
-  conviction,
-  deepSummary,
-  tokenIntelligence,
+function buildWalletFlowInsights({
+  analyzedWallets,
+  contributors,
+  dominantFlow,
+  netFlowBias,
 }: {
-  behaviorPreview: WalletBehaviorPreviewData | null;
-  conviction: ExplainableConvictionData | null;
-  deepSummary?: NonNullable<ExplainableConvictionData["deepBehavior"]>["summary"];
-  tokenIntelligence: TokenIntelligenceData | null;
-}) {
-  const accumulation: string[] = [];
-  const distribution: string[] = [];
-  const rotation: string[] = [];
-  const dormancy: string[] = [];
+  analyzedWallets?: number;
+  contributors: WalletFlowContributor[];
+  dominantFlow?: string;
+  netFlowBias?: number;
+}): WalletFlowInsight[] {
+  const largestContributor = contributors[0];
+  const holderCount =
+    typeof analyzedWallets === "number" && Number.isFinite(analyzedWallets) && analyzedWallets > 0
+      ? analyzedWallets
+      : undefined;
+  const marketPosture =
+    typeof netFlowBias === "number" && Number.isFinite(netFlowBias)
+      ? netFlowBias > 0
+        ? "Accumulation-biased"
+        : netFlowBias < 0
+        ? "Distribution-biased"
+        : "Balanced"
+      : undefined;
 
-  if (deepSummary) {
-    accumulation.push(
-      `Average accumulation pressure is ${Math.round(deepSummary.averageAccumulationPressure)}/100 across ${deepSummary.analyzedWallets} analyzed wallets.`
-    );
-    accumulation.push(
-      `Average token-specific conviction is ${Math.round(deepSummary.averageTokenSpecificConviction)}/100 from transfer behavior inputs.`
-    );
-    distribution.push(
-      `Average distribution pressure is ${Math.round(deepSummary.averageDistributionPressure)}/100 across analyzed wallets.`
-    );
-    distribution.push(
-      `${deepSummary.highRiskWalletCount} analyzed wallets are flagged as high risk by deep behavior.`
-    );
-    rotation.push(
-      `Average rotation behavior risk is ${Math.round(deepSummary.averageRotationBehaviorRisk)}/100.`
-    );
-    rotation.push(
-      `Average short-hold risk is ${Math.round(deepSummary.averageShortHoldRisk)}/100.`
-    );
-  } else {
-    accumulation.push("No transfer-derived accumulation pressure is loaded.");
-    distribution.push("No transfer-derived distribution pressure is loaded.");
-    rotation.push("Rotation can only use conviction or profile-level inputs until deep behavior is loaded.");
-  }
-
-  if (typeof conviction?.subScores.rotationRisk === "number") {
-    rotation.push(
-      `Conviction Engine rotation risk is ${Math.round(conviction.subScores.rotationRisk)}/100.`
-    );
-  }
-  if (behaviorPreview?.summary.dominantBehaviorClass) {
-    rotation.push(
-      `Dominant wallet profile class is ${behaviorPreview.summary.dominantBehaviorClass}.`
-    );
-  }
-  if (typeof tokenIntelligence?.behaviorSummary.averageDormancyRisk === "number") {
-    dormancy.push(
-      `Average dormancy risk is ${Math.round(tokenIntelligence.behaviorSummary.averageDormancyRisk)}/100 in token intelligence.`
-    );
-  }
-  if (behaviorPreview?.summary.dominantBehaviorClass) {
-    dormancy.push(
-      `Dominant wallet profile class is ${behaviorPreview.summary.dominantBehaviorClass}.`
-    );
-  }
-  if (dormancy.length === 0) {
-    dormancy.push("Dormancy pressure needs wallet activity profile evidence.");
-  }
-
-  return { accumulation, distribution, rotation, dormancy };
+  return [
+    {
+      title: "Dominant Behavior",
+      value: dominantFlow || "Unavailable",
+      detail: dominantFlow ? "Derived from loaded wallet-flow signals." : undefined,
+    },
+    {
+      title: "Largest Influence",
+      value: largestContributor?.displayAddress || "Unavailable",
+      detail: largestContributor
+        ? `${largestContributor.ownership} ownership - ${largestContributor.flowLabel}`
+        : undefined,
+    },
+    {
+      title: "Holder Participation",
+      value: holderCount ? `${holderCount} holder${holderCount === 1 ? "" : "s"}` : "Unavailable",
+      detail: holderCount ? "Observed in the loaded holder-flow sample." : undefined,
+    },
+    {
+      title: "Market Posture",
+      value: marketPosture || "Unavailable",
+      detail:
+        typeof netFlowBias === "number" && Number.isFinite(netFlowBias)
+          ? `Net bias ${formatFlowBias(netFlowBias)}`
+          : undefined,
+    },
+  ];
 }
 
 function TopFlowContributorsTable({
@@ -9687,7 +9363,7 @@ function TopFlowContributorsTable({
   contributors: WalletFlowContributor[];
 }) {
   const gridClass =
-    "grid-cols-[minmax(150px,1.2fr)_minmax(78px,0.58fr)_minmax(128px,0.82fr)_minmax(86px,0.62fr)_minmax(92px,0.65fr)_minmax(92px,0.65fr)_minmax(92px,0.65fr)_minmax(92px,0.65fr)]";
+    "grid-cols-[minmax(220px,1.55fr)_minmax(110px,0.72fr)_minmax(150px,0.9fr)_minmax(120px,0.72fr)]";
 
   return (
     <section className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.03] backdrop-blur-2xl">
@@ -9710,21 +9386,17 @@ function TopFlowContributorsTable({
         />
       ) : (
         <div className="overflow-x-auto">
-        <div className={`grid min-w-[1080px] ${gridClass} gap-3 ${terminalTableHeaderClass}`}>
+        <div className={`grid min-w-[720px] ${gridClass} gap-3 ${terminalTableHeaderClass}`}>
             <span>Wallet</span>
             <span className="text-center">Ownership</span>
             <span className="text-center">Direction</span>
             <span className="text-center">Net Bias</span>
-            <span className="text-center">Accum.</span>
-            <span className="text-center">Distrib.</span>
-            <span className="text-center">Rotation</span>
-            <span className="text-center">Confidence</span>
           </div>
           <div>
             {contributors.map((contributor) => (
               <div
                 key={contributor.address || contributor.displayAddress}
-                className={`grid min-h-[58px] min-w-[1080px] ${gridClass} items-center gap-3 ${terminalRowClass}`}
+                className={`grid min-h-[58px] min-w-[720px] ${gridClass} items-center gap-3 ${terminalRowClass}`}
               >
                 <div className="min-w-0">
                   <p className="truncate font-mono text-white/74">
@@ -9743,10 +9415,6 @@ function TopFlowContributorsTable({
                 <span className="text-center text-sm font-medium tabular-nums text-white/64">
                   {formatFlowBias(contributor.netFlowBiasScore)}
                 </span>
-                <FlowScoreCell value={contributor.accumulationPressure} />
-                <FlowScoreCell value={contributor.distributionPressure} />
-                <FlowScoreCell value={contributor.rotationRisk} />
-                <FlowScoreCell value={contributor.confidenceScore} />
               </div>
             ))}
           </div>
@@ -9776,26 +9444,18 @@ function WalletFlowSummaryCard({
   );
 }
 
-function WalletFlowEvidenceCard({
-  rows,
-  title,
-}: {
-  rows: string[];
-  title: string;
-}) {
+function WalletFlowInsightCard({ insight }: { insight: WalletFlowInsight }) {
   return (
-    <div className="rounded-[1.5rem] border border-white/10 bg-black/20 p-4">
-      <h3 className="text-sm font-medium text-white/78">{title}</h3>
-      <div className="mt-3 space-y-2">
-        {rows.map((row) => (
-          <p
-            key={row}
-            className="rounded-2xl border border-white/[0.07] bg-white/[0.025] px-3 py-2 text-xs leading-relaxed text-white/36"
-          >
-            {row}
-          </p>
-        ))}
-      </div>
+    <div className="min-h-[128px] rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+      <p className="text-[10px] uppercase tracking-[0.16em] text-white/32">
+        {insight.title}
+      </p>
+      <p className="mt-3 truncate text-xl font-semibold tracking-[-0.045em] text-white/84">
+        {insight.value}
+      </p>
+      {insight.detail && (
+        <p className="mt-3 text-xs leading-relaxed text-white/34">{insight.detail}</p>
+      )}
     </div>
   );
 }
@@ -9849,14 +9509,6 @@ function FlowTinyFact({
       <p className="text-[9px] uppercase tracking-[0.14em] text-white/28">{label}</p>
       <p className="mt-1 truncate text-xs font-medium text-white/68">{value}</p>
     </div>
-  );
-}
-
-function FlowScoreCell({ value }: { value?: number }) {
-  return (
-    <span className="text-center text-sm font-medium tabular-nums text-white/64">
-      {formatFlowScore(value)}
-    </span>
   );
 }
 
@@ -9940,19 +9592,13 @@ function InsiderScanDashboard({
   convictionError,
   convictionLoadState,
   holderIntelligenceMatrix,
-  holderIntelligenceSummary,
   holderError,
   holderLoadState,
   insiderRiskV2,
   onSelectWallet,
-  personalityError,
-  personalityLoadState,
-  personalityPreviews,
   token,
   tokenData,
   tokenIntelligence,
-  walletReputationResults,
-  walletReputationSummary,
   walletRows,
 }: {
   behaviorPreview: WalletBehaviorPreviewData | null;
@@ -9961,19 +9607,13 @@ function InsiderScanDashboard({
   convictionError: string;
   convictionLoadState: HolderLoadState;
   holderIntelligenceMatrix: HolderIntelligenceProfile[];
-  holderIntelligenceSummary: HolderIntelligenceSummary | null;
   holderError: string;
   holderLoadState: HolderLoadState;
   insiderRiskV2: InsiderRiskV2Result;
   onSelectWallet: (row: WalletRow, profile?: WalletBehaviorProfile) => void;
-  personalityError: string;
-  personalityLoadState: HolderLoadState;
-  personalityPreviews: WalletPersonalityPreview[];
   token: string;
   tokenData: TokenResult;
   tokenIntelligence: TokenIntelligenceData | null;
-  walletReputationResults: WalletReputationResult[];
-  walletReputationSummary: TokenWalletReputationSummary | null;
   walletRows: WalletRow[];
 }) {
   const bundleDetection = conviction?.bundleDetection;
@@ -10004,8 +9644,8 @@ function InsiderScanDashboard({
       <TerminalSectionHeader
         badge="Behavioral inference only"
         eyebrow="Insider Scan"
-        subtitle="Holder concentration, bundle-like behavior and fake decentralization signals organized into a conservative forensic review."
-        title="Structural wallet-risk analysis"
+        subtitle="A simplified read on holder concentration, coordination pressure and evidence quality from loaded NovaOS intelligence."
+        title="Holder base structural safety"
       >
           <div className="flex items-center gap-3 self-center rounded-2xl border border-white/10 bg-black/25 px-4 py-3 lg:min-w-[248px]">
             <TokenAvatar
@@ -10040,21 +9680,11 @@ function InsiderScanDashboard({
         <>
           <InsiderRiskV2Panel result={insiderRiskV2} />
 
-          <WalletReputationPanel
-            results={walletReputationResults}
-            summary={walletReputationSummary}
-          />
-
-          <HolderIntelligenceMatrixPanel
-            matrix={holderIntelligenceMatrix}
-            summary={holderIntelligenceSummary}
-          />
-
           <section>
             <ForensicSectionHeading
               eyebrow="Evidence Review"
-              title="Why This Risk Level?"
-              description="Measured facts and conservative inferences are separated so missing evidence stays visible."
+              title="Why This Risk Level"
+              description="Only loaded holder, relationship, cluster and behavior evidence is shown."
             />
             <div className="mt-3 grid gap-3 xl:grid-cols-3">
               <EvidenceCard
@@ -10076,22 +9706,9 @@ function InsiderScanDashboard({
             </div>
           </section>
 
-          <DetectedRiskGroups groups={bundleDetection?.detectedGroups || []} />
-
-          <InsiderHolderRiskPreview
-            behaviorProfiles={behaviorPreview?.profiles || []}
+          <DetectedRiskGroups
             bundleGroups={bundleDetection?.detectedGroups || []}
-            holderLoadState={holderLoadState}
-            onSelectWallet={onSelectWallet}
-            personalityError={personalityError}
-            personalityLoadState={personalityLoadState}
-            personalityPreviews={personalityPreviews}
-            walletRows={walletRows}
-          />
-
-          <InsiderScanMethodology
-            conviction={conviction}
-            tokenIntelligence={tokenIntelligence}
+            patterns={insiderRiskV2.detectedPatterns}
           />
         </>
       )}
@@ -10099,9 +9716,7 @@ function InsiderScanDashboard({
       <StableWalletIntelligenceTable
         walletRows={walletRows}
         behaviorProfiles={behaviorPreview?.profiles || []}
-        personalityError={personalityError}
-        personalityLoadState={personalityLoadState}
-        personalityPreviews={personalityPreviews}
+        holderIntelligenceMatrix={holderIntelligenceMatrix}
         loadState={holderLoadState}
         error={holderError}
         onSelectWallet={onSelectWallet}
@@ -10117,7 +9732,7 @@ function EvidenceCard({ label, rows }: { label: string; rows: string[] }) {
       <div className="mt-4 space-y-2.5">
         {(rows.length
           ? rows
-          : ["Not enough live data available for this evidence type."]
+          : ["Insufficient evidence."]
         ).map((row) => (
           <div key={row} className="flex gap-2 text-xs leading-relaxed text-white/48">
             <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-cyan-100/42" />
@@ -10130,10 +9745,30 @@ function EvidenceCard({ label, rows }: { label: string; rows: string[] }) {
 }
 
 function DetectedRiskGroups({
-  groups,
+  bundleGroups,
+  patterns,
 }: {
-  groups: NonNullable<ExplainableConvictionData["bundleDetection"]>["detectedGroups"];
+  bundleGroups: NonNullable<ExplainableConvictionData["bundleDetection"]>["detectedGroups"];
+  patterns: InsiderRiskV2Result["detectedPatterns"];
 }) {
+  const groups = [
+    ...bundleGroups.filter((group) => group.wallets.length > 0),
+    ...patterns
+      .filter((pattern) => pattern.severity !== "Low" && pattern.affectedWallets.length > 0)
+      .map((pattern) => ({
+        confidence: pattern.confidence,
+        groupId: `pattern-${pattern.label}`,
+        reason: `${pattern.label}: ${pattern.evidence}`,
+        riskScore:
+          pattern.severity === "Critical"
+            ? 90
+            : pattern.severity === "Elevated"
+              ? 75
+              : 55,
+        wallets: pattern.affectedWallets,
+      })),
+  ];
+
   return (
     <section>
       <ForensicSectionHeading
@@ -10144,7 +9779,7 @@ function DetectedRiskGroups({
       <div className="mt-3 grid max-w-[1180px] gap-3 lg:grid-cols-2">
         {groups.length === 0 ? (
           <div className="rounded-2xl border border-cyan-100/10 bg-cyan-100/[0.025] p-4 text-sm text-white/42 lg:col-span-2">
-            No high-confidence bundle-like group detected from available data.
+            No significant risk groups detected.
           </div>
         ) : (
           groups.slice(0, 6).map((group) => (
@@ -10375,6 +10010,14 @@ function InsiderScanMethodology({
     </section>
   );
 }
+
+const INSIDER_SCAN_REMOVED_SECTIONS = [
+  HolderIntelligenceMatrixPanel,
+  WalletReputationMiniCard,
+  InsiderHolderRiskPreview,
+  InsiderScanMethodology,
+];
+void INSIDER_SCAN_REMOVED_SECTIONS;
 
 function InsiderScanEmptyState({
   detail,
@@ -12427,18 +12070,14 @@ function Panel({
 function StableWalletIntelligenceTable({
   walletRows,
   behaviorProfiles,
-  personalityError,
-  personalityLoadState,
-  personalityPreviews,
+  holderIntelligenceMatrix,
   loadState,
   error,
   onSelectWallet,
 }: {
   walletRows: WalletRow[];
   behaviorProfiles: WalletBehaviorProfile[];
-  personalityError: string;
-  personalityLoadState: HolderLoadState;
-  personalityPreviews: WalletPersonalityPreview[];
+  holderIntelligenceMatrix: HolderIntelligenceProfile[];
   loadState: HolderLoadState;
   error: string;
   onSelectWallet: (row: WalletRow, profile?: WalletBehaviorProfile) => void;
@@ -12455,14 +12094,14 @@ function StableWalletIntelligenceTable({
       ])
     );
   }, [behaviorProfiles]);
-  const personalityByAddress = useMemo(() => {
+  const holderProfileByAddress = useMemo(() => {
     return new Map(
-      personalityPreviews.map((personality) => [
-        personality.walletAddress.toLowerCase(),
-        personality,
+      holderIntelligenceMatrix.map((holder) => [
+        holder.walletAddress.toLowerCase(),
+        holder,
       ])
     );
-  }, [personalityPreviews]);
+  }, [holderIntelligenceMatrix]);
 
   return (
     <section className="rounded-[2rem] border border-white/10 bg-[#06080c]/90 p-5 shadow-[0_30px_120px_rgba(0,0,0,0.28)] backdrop-blur-2xl">
@@ -12473,38 +12112,30 @@ function StableWalletIntelligenceTable({
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <h2 className="text-2xl font-semibold tracking-[-0.05em]">
-              Full Holder Intelligence Table
+              Top Holder Intelligence
             </h2>
             <span className="rounded-full border border-cyan-100/10 bg-cyan-100/[0.045] px-3 py-1 text-xs text-cyan-100/60">
-              Top 100 holder matrix
+              Top holders
             </span>
           </div>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-white/35">
-            Raw holder-level facts and inferred behavior labels. Behavior and
-            personality inference is shown only for profiled wallets.
+            A clean holder-level read from loaded ownership and Holder
+            Intelligence evidence.
           </p>
         </div>
 
-        <div className="hidden rounded-full border border-cyan-100/10 bg-cyan-100/[0.045] px-4 py-2 text-xs text-cyan-100/60 md:block">
-          Pending V2
-        </div>
       </div>
 
       <div className="w-full overflow-x-auto rounded-[1.4rem] border border-white/10">
-        <div className={`grid min-h-[42px] w-full min-w-[1120px] ${fullHolderGridClass} items-center gap-3 ${terminalTableHeaderClass}`}>
-          <span>#</span>
+        <div className={`grid min-h-[42px] w-full min-w-[760px] ${fullHolderGridClass} items-center gap-3 ${terminalTableHeaderClass}`}>
           <span>Wallet</span>
-          <span className="text-center">Balance</span>
           <span className="text-center">Ownership</span>
-          <span className="text-center">V2 Behavior</span>
-          <span className="text-center">Personality</span>
-          <span className="text-center">Activity</span>
-          <span className="text-center">Dormancy</span>
-          <span className="text-center">Concentration</span>
-          <span className="text-center">Reliability</span>
+          <span className="text-center">Behavior</span>
+          <span className="text-center">Risk</span>
+          <span className="text-center">Score</span>
         </div>
 
-        <div className="max-h-[680px] w-full min-w-[1120px] overflow-y-auto overflow-x-hidden pr-1 [scrollbar-gutter:stable]">
+        <div className="max-h-[680px] w-full min-w-[760px] overflow-y-auto overflow-x-hidden pr-1 [scrollbar-gutter:stable]">
           {isIdle && (
             <HolderStateMessage
               title="Select a token to activate Holder Intelligence V1."
@@ -12535,8 +12166,8 @@ function StableWalletIntelligenceTable({
             const matchedProfile = row.fullAddress
               ? profileByAddress.get(row.fullAddress.toLowerCase())
               : undefined;
-            const matchedPersonality = row.fullAddress
-              ? personalityByAddress.get(row.fullAddress.toLowerCase())
+            const matchedHolderProfile = row.fullAddress
+              ? holderProfileByAddress.get(row.fullAddress.toLowerCase())
               : undefined;
 
             return (
@@ -12550,8 +12181,6 @@ function StableWalletIntelligenceTable({
               onClick={() => onSelectWallet(row, matchedProfile)}
               className={`group grid min-h-[60px] w-full ${fullHolderGridClass} items-center gap-3 text-left text-[13px] focus:outline-none focus:ring-1 focus:ring-inset focus:ring-cyan-100/20 ${terminalRowClass}`}
             >
-              <span className="text-white/30">{row.rank}</span>
-
               <div className="flex min-w-0 items-center gap-3">
                 <motion.span
                   animate={{ opacity: [0.4, 1, 0.4], scale: [1, 1.18, 1] }}
@@ -12576,33 +12205,27 @@ function StableWalletIntelligenceTable({
                     {row.fullAddress ? shortInsiderWalletAddress(row.fullAddress) : row.wallet}
                   </p>
                   <p className="mt-0.5 truncate text-[11px] text-white/32">
-                    {row.label || "Holder wallet"}
+                    #{row.rank} {row.label || "Holder wallet"}
                   </p>
                 </div>
               </div>
 
-              <span className="truncate text-center tabular-nums text-white/58">{row.balance}</span>
               <span className="text-center font-medium tabular-nums text-cyan-100/72">
                 {row.ownershipPercentage}
               </span>
-              <div className="flex min-w-0 justify-center">
-                <V2BehaviorBadge profile={matchedProfile} />
-              </div>
-              <div className="flex min-w-0 justify-center">
-                <PersonalityTableCell
-                  isLoading={personalityLoadState === "loading" && row.rank <= 5}
-                  isUnavailable={Boolean(personalityError)}
-                  personality={matchedPersonality}
-                />
-              </div>
-              <ScoreCell centered value={matchedProfile?.activityVelocityScore} />
-              <ScoreCell centered value={matchedProfile?.dormancyRiskScore} />
-              <ScoreCell
-                centered
-                fallback={row.estimatedCluster || row.cluster}
-                value={matchedProfile?.concentrationRiskScore}
-              />
-              <ScoreCell centered value={matchedProfile?.behaviorReliabilityScore} />
+              <span className="truncate text-center text-white/58">
+                {matchedHolderProfile?.holderClass ||
+                  (matchedProfile ? behaviorBadgeLabel(matchedProfile) : "Insufficient evidence.")}
+              </span>
+              <span className="truncate text-center text-white/58">
+                {matchedHolderProfile?.riskTier ||
+                  (matchedProfile ? holderRiskHint(row, matchedProfile, false) : "Insufficient evidence.")}
+              </span>
+              <span className="text-center font-medium tabular-nums text-cyan-100/72">
+                {typeof matchedHolderProfile?.overallHolderScore === "number"
+                  ? matchedHolderProfile.overallHolderScore
+                  : "Insufficient evidence."}
+              </span>
             </motion.button>
             );
           })}
@@ -12639,24 +12262,19 @@ function HolderTableSkeleton() {
       {Array.from({ length: 8 }).map((_, index) => (
         <div
           key={index}
-          className={`grid min-h-[60px] w-full min-w-[1120px] ${fullHolderGridClass} items-center gap-3 border-b border-white/[0.055] px-4 py-3`}
+          className={`grid min-h-[60px] w-full min-w-[760px] ${fullHolderGridClass} items-center gap-3 border-b border-white/[0.055] px-4 py-3`}
         >
-          <SkeletonLine className="h-3 w-5" />
           <div className="flex items-center gap-3">
             <SkeletonLine className="h-2 w-2 rounded-full" />
             <div className="min-w-0 flex-1">
               <SkeletonLine className="h-3 w-28" />
-              <SkeletonLine className="mt-2 h-2 w-52" />
+              <SkeletonLine className="mt-2 h-2 w-20" />
             </div>
           </div>
           <SkeletonLine className="h-3 w-16" />
-          <SkeletonLine className="h-3 w-14" />
-          <SkeletonLine className="h-6 w-24 rounded-full" />
-          <SkeletonLine className="h-6 w-28 rounded-full" />
-          <SkeletonLine className="h-3 w-7" />
-          <SkeletonLine className="h-3 w-7" />
-          <SkeletonLine className="h-3 w-7" />
-          <SkeletonLine className="h-3 w-7" />
+          <SkeletonLine className="mx-auto h-6 w-24 rounded-full" />
+          <SkeletonLine className="mx-auto h-3 w-20" />
+          <SkeletonLine className="mx-auto h-3 w-12" />
         </div>
       ))}
       <p className="px-4 py-4 text-xs text-white/28">
