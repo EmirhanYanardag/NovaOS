@@ -1,8 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
-
 type UnknownRecord = Record<string, unknown>;
 
 export type GmgnRiskStats = {
@@ -46,6 +41,8 @@ export type GmgnRiskStats = {
 const SUPPORTED_GMGN_CHAINS = ["eth", "base", "bsc", "sol", "mantle"] as const;
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const SOL_ADDRESS_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const DEFAULT_GMGN_API_BASE = "https://gmgn.ai";
+const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL);
 
 const RATIO_FIELDS = {
   top10HolderPercentage: "stat.top_10_holder_rate",
@@ -187,6 +184,13 @@ function priceValue(root: UnknownRecord, path: string) {
 }
 
 async function runGmgnTokenInfo(chain: string, address: string) {
+  if (IS_VERCEL_RUNTIME) {
+    throw new Error("gmgn-cli execution is disabled in Vercel serverless runtime.");
+  }
+
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
   const args = ["token", "info", "--chain", chain, "--address", address];
   const execOptions = {
     env: {
@@ -208,6 +212,100 @@ async function runGmgnTokenInfo(chain: string, address: string) {
   } catch {
     throw new Error("GMGN token info returned non-JSON output.");
   }
+}
+
+function gmgnAuthHeaders() {
+  const apiKey = process.env.GMGN_API_KEY || "";
+  const headers: Record<string, string> = {
+    accept: "application/json",
+  };
+
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+    headers["X-API-KEY"] = apiKey;
+    headers["x-api-key"] = apiKey;
+  }
+
+  return headers;
+}
+
+function gmgnApiBaseCandidates() {
+  const configured = process.env.GMGN_API_BASE?.trim();
+  return Array.from(new Set([
+    configured || "",
+    DEFAULT_GMGN_API_BASE,
+    "https://api.gmgn.ai",
+  ].filter(Boolean))).map((base) => base.replace(/\/+$/, ""));
+}
+
+function candidateUrl(base: string, path: string, params: Record<string, string | number | undefined> = {}) {
+  const url = new URL(path, `${base}/`);
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") url.searchParams.set(key, String(value));
+  }
+  return url;
+}
+
+function sanitizeProviderError(message: string) {
+  return message
+    .replace(process.env.GMGN_API_KEY || "__NO_KEY__", "[redacted]")
+    .replace(/https?:\/\/[^\s)]+/g, (url) => {
+      try {
+        const parsed = new URL(url);
+        return `${parsed.origin}${parsed.pathname}`;
+      } catch {
+        return "[url]";
+      }
+    })
+    .slice(0, 360);
+}
+
+async function fetchJsonCandidates(candidates: URL[]) {
+  const failures: string[] = [];
+
+  for (const url of candidates) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12_000);
+
+    try {
+      const response = await fetch(url.toString(), {
+        headers: gmgnAuthHeaders(),
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      let data: unknown = null;
+      if (text.trim()) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          failures.push(`${url.pathname}: non-json response`);
+          continue;
+        }
+      }
+      if (!response.ok) {
+        failures.push(`${url.pathname}: HTTP ${response.status}`);
+        continue;
+      }
+      return data;
+    } catch (error) {
+      failures.push(`${url.pathname}: ${error instanceof Error ? error.message : "unknown error"}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw new Error(`GMGN token info unavailable via direct HTTP. ${sanitizeProviderError(failures.join("; "))}`);
+}
+
+async function fetchGmgnTokenInfoDirect(chain: string, address: string) {
+  const candidates = gmgnApiBaseCandidates().flatMap((base) => [
+    candidateUrl(base, `/defi/quotation/v1/tokens/${chain}/${address}`),
+    candidateUrl(base, `/defi/quotation/v1/token/${chain}/${address}`),
+    candidateUrl(base, `/api/v1/token/info/${chain}/${address}`),
+  ]);
+
+  return fetchJsonCandidates(candidates);
 }
 
 function buildWarnings(result: GmgnRiskStats) {
@@ -242,7 +340,12 @@ export async function fetchGmgnRiskStats({
 }): Promise<GmgnRiskStats> {
   validateInput(chain, address);
 
-  const raw = await runGmgnTokenInfo(chain, address);
+  const raw = IS_VERCEL_RUNTIME || process.env.GMGN_DIRECT_HTTP === "true"
+    ? await fetchGmgnTokenInfoDirect(chain, address)
+    : await runGmgnTokenInfo(chain, address).catch((error) => {
+        if (process.env.GMGN_CLI_ONLY === "true") throw error;
+        return fetchGmgnTokenInfoDirect(chain, address);
+      });
   const { root, prefix } = payloadRoot(raw);
   const rawFieldMap: Record<string, string> = {};
 

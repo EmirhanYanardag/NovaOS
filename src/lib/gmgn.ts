@@ -1,8 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
-
 export type GMGNActivity = {
   timestamp: string | null;
   type: "buy" | "sell" | "transfer" | string | null;
@@ -66,6 +61,8 @@ const SOL_WALLET_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const SAFE_CURSOR_PATTERN = /^[A-Za-z0-9._:+=/-]{1,512}$/;
 const SAFE_ORDER_BY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const SUPPORTED_GMGN_CHAINS = ["eth", "base", "bsc", "sol", "mantle"] as const;
+const DEFAULT_GMGN_API_BASE = "https://gmgn.ai";
+const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL);
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -438,6 +435,13 @@ function buildGmgnTopHoldersArgs({
 }
 
 async function runGmgnCli(args: string[]) {
+  if (IS_VERCEL_RUNTIME) {
+    throw new Error("gmgn-cli execution is disabled in Vercel serverless runtime.");
+  }
+
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
   const env = {
     ...process.env,
     GMGN_API_KEY: process.env.GMGN_API_KEY,
@@ -461,6 +465,149 @@ async function runGmgnCli(args: string[]) {
   }
 }
 
+function gmgnAuthHeaders() {
+  const apiKey = process.env.GMGN_API_KEY || "";
+  const headers: HeadersInit = {
+    accept: "application/json",
+  };
+
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+    headers["X-API-KEY"] = apiKey;
+    headers["x-api-key"] = apiKey;
+  }
+
+  return headers;
+}
+
+function gmgnApiBaseCandidates() {
+  const configured = process.env.GMGN_API_BASE?.trim();
+  return Array.from(new Set([
+    configured || "",
+    DEFAULT_GMGN_API_BASE,
+    "https://api.gmgn.ai",
+  ].filter(Boolean))).map((base) => base.replace(/\/+$/, ""));
+}
+
+function candidateUrl(base: string, path: string, params: Record<string, string | number | undefined>) {
+  const url = new URL(path, `${base}/`);
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") url.searchParams.set(key, String(value));
+  }
+  return url;
+}
+
+function sanitizeProviderError(message: string) {
+  return message
+    .replace(process.env.GMGN_API_KEY || "__NO_KEY__", "[redacted]")
+    .replace(/https?:\/\/[^\s)]+/g, (url) => {
+      try {
+        const parsed = new URL(url);
+        return `${parsed.origin}${parsed.pathname}`;
+      } catch {
+        return "[url]";
+      }
+    })
+    .slice(0, 360);
+}
+
+async function fetchJsonCandidates({
+  candidates,
+  source,
+}: {
+  candidates: URL[];
+  source: string;
+}) {
+  const failures: string[] = [];
+
+  for (const url of candidates) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12_000);
+
+    try {
+      const response = await fetch(url.toString(), {
+        headers: gmgnAuthHeaders(),
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      let data: unknown = null;
+
+      if (text.trim()) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          failures.push(`${url.pathname}: non-json response`);
+          continue;
+        }
+      }
+
+      if (!response.ok) {
+        failures.push(`${url.pathname}: HTTP ${response.status}`);
+        continue;
+      }
+
+      return data;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "unknown error";
+      failures.push(`${url.pathname}: ${reason}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw new Error(`${source} unavailable via direct GMGN HTTP. ${sanitizeProviderError(failures.join("; "))}`);
+}
+
+async function fetchGmgnWalletActivityDirect(input: GmgnWalletActivityInput) {
+  const candidates = gmgnApiBaseCandidates().flatMap((base) => [
+    candidateUrl(base, `/defi/quotation/v1/wallet_activity/${input.chain}/${input.wallet}`, {
+      limit: input.limit,
+      cursor: input.cursor,
+      type: input.type,
+    }),
+    candidateUrl(base, `/defi/quotation/v1/wallet/activity/${input.chain}/${input.wallet}`, {
+      limit: input.limit,
+      cursor: input.cursor,
+      type: input.type,
+    }),
+    candidateUrl(base, `/api/v1/wallet/activity/${input.chain}/${input.wallet}`, {
+      limit: input.limit,
+      cursor: input.cursor,
+      type: input.type,
+    }),
+  ]);
+
+  return fetchJsonCandidates({ candidates, source: "GMGN wallet activity" });
+}
+
+async function fetchGmgnTopHoldersDirect(input: GmgnTopHoldersInput) {
+  const candidates = gmgnApiBaseCandidates().flatMap((base) => [
+    candidateUrl(base, `/defi/quotation/v1/tokens/top_holders/${input.chain}/${input.address}`, {
+      limit: input.limit,
+      orderby: input.orderBy,
+      direction: input.direction,
+    }),
+    candidateUrl(base, `/defi/quotation/v1/tokens/${input.chain}/${input.address}/top_holders`, {
+      limit: input.limit,
+      orderby: input.orderBy,
+      direction: input.direction,
+    }),
+    candidateUrl(base, `/defi/quotation/v1/token_holders/${input.chain}/${input.address}`, {
+      limit: input.limit,
+      orderby: input.orderBy,
+      direction: input.direction,
+    }),
+    candidateUrl(base, `/api/v1/token_holders/${input.chain}/${input.address}`, {
+      limit: input.limit,
+      orderby: input.orderBy,
+      direction: input.direction,
+    }),
+  ]);
+
+  return fetchJsonCandidates({ candidates, source: "GMGN top holders" });
+}
+
 export async function runGmgnWalletActivity({
   chain,
   wallet,
@@ -471,8 +618,17 @@ export async function runGmgnWalletActivity({
   const input = { chain, wallet, limit, cursor, type };
   validateWalletActivityInput(input);
 
+  if (IS_VERCEL_RUNTIME || process.env.GMGN_DIRECT_HTTP === "true") {
+    return fetchGmgnWalletActivityDirect(input);
+  }
+
   const args = buildGmgnCliArgs(input);
-  return runGmgnCli(args);
+  try {
+    return await runGmgnCli(args);
+  } catch (error) {
+    if (process.env.GMGN_CLI_ONLY === "true") throw error;
+    return fetchGmgnWalletActivityDirect(input);
+  }
 }
 
 export async function runGmgnTopHolders({
@@ -485,5 +641,14 @@ export async function runGmgnTopHolders({
   const input = { chain, address, limit, orderBy, direction };
   validateTopHoldersInput(input);
 
-  return runGmgnCli(buildGmgnTopHoldersArgs(input));
+  if (IS_VERCEL_RUNTIME || process.env.GMGN_DIRECT_HTTP === "true") {
+    return fetchGmgnTopHoldersDirect(input);
+  }
+
+  try {
+    return await runGmgnCli(buildGmgnTopHoldersArgs(input));
+  } catch (error) {
+    if (process.env.GMGN_CLI_ONLY === "true") throw error;
+    return fetchGmgnTopHoldersDirect(input);
+  }
 }

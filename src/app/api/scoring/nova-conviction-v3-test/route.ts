@@ -41,6 +41,8 @@ const DEFAULT_MAX_TOKENS = 50;
 const MAX_TOKENS = 100;
 const DEFAULT_CONCURRENCY = 2;
 const MAX_CONCURRENCY = 5;
+const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL);
+const CHILD_PROCESS_USED = !IS_VERCEL_RUNTIME && process.env.GMGN_DIRECT_HTTP !== "true";
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const SOL_ADDRESS_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
@@ -75,6 +77,39 @@ function errorResponse(error: string, status = 400, requestRunId: string | null 
     { success: false, error, requestRunId },
     { status, headers: noStoreHeaders }
   );
+}
+
+function sanitizeError(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error ?? "unknown error");
+  return raw
+    .replace(process.env.GMGN_API_KEY || "__NO_KEY__", "[redacted]")
+    .replace(/https?:\/\/[^\s)]+/g, (url) => {
+      try {
+        const parsed = new URL(url);
+        return `${parsed.origin}${parsed.pathname}`;
+      } catch {
+        return "[url]";
+      }
+    })
+    .slice(0, 500);
+}
+
+function shouldExposeDebug(searchParams: URLSearchParams) {
+  return searchParams.get("debug") === "true" && process.env.NODE_ENV !== "production";
+}
+
+function productionLog(
+  event: string,
+  payload: Record<string, unknown>
+) {
+  console.log(`[Nova V3] ${event}`, {
+    hasGMGNKey: Boolean(process.env.GMGN_API_KEY),
+    holderAlphaSource: IS_VERCEL_RUNTIME || process.env.GMGN_DIRECT_HTTP === "true"
+      ? "direct-http"
+      : "local-cli-fallback",
+    childProcessUsed: CHILD_PROCESS_USED,
+    ...payload,
+  });
 }
 
 function isGmgnRateLimitText(value: unknown) {
@@ -143,29 +178,46 @@ function holderAlphaExecutionErrorResponse({
   analysisMode,
   chain,
   error,
+  exposeDebug,
+  runtimeMs,
   requestRunId,
 }: {
   address: string;
   analysisMode: AnalysisMode;
   chain: string;
   error: unknown;
+  exposeDebug: boolean;
+  runtimeMs: number;
   requestRunId: string | null;
 }) {
+  const sanitizedError = sanitizeError(error);
+  const debug = {
+    hasGMGNKey: Boolean(process.env.GMGN_API_KEY),
+    failingStep: "holder-alpha-execution",
+    sanitizedError,
+    holderAlphaSource: IS_VERCEL_RUNTIME || process.env.GMGN_DIRECT_HTTP === "true"
+      ? "direct-http"
+      : "local-cli-fallback",
+    runtimeMs,
+    walletIndex: null,
+    childProcessUsed: CHILD_PROCESS_USED,
+    chain,
+    address,
+    analysisMode,
+    runId: requestRunId,
+  };
+
+  productionLog("Holder Alpha execution failed", debug);
+
   return NextResponse.json(
     {
       success: false,
-      error: "Holder Alpha execution failed inside Nova Conviction V3 route.",
-      details: error instanceof Error ? error.message : String(error),
+      error: "Holder Alpha source unavailable. Nova Conviction V3 could not start holder analysis.",
+      errorCode: "HOLDER_ALPHA_SOURCE_UNAVAILABLE",
       requestRunId,
-      debug: {
-        stage: "holder-alpha-execution",
-        chain,
-        address,
-        analysisMode,
-        runId: requestRunId,
-      },
+      ...(exposeDebug ? { debug } : {}),
     },
-    { status: 500, headers: noStoreHeaders }
+    { status: 502, headers: noStoreHeaders }
   );
 }
 
@@ -330,12 +382,29 @@ export async function GET(request: Request) {
   const startedAt = Date.now();
   const { searchParams } = new URL(request.url);
   const runId = searchParams.get("runId")?.trim() || null;
+  const exposeDebug = shouldExposeDebug(searchParams);
 
   if (!process.env.GMGN_API_KEY) {
-    return errorResponse(
-      "Missing GMGN_API_KEY in server environment. Add it to .env.local or .env in the project root, then restart the Next.js server.",
-      500,
-      runId
+    const debug = {
+      hasGMGNKey: false,
+      failingStep: "env-validation",
+      sanitizedError: "Missing GMGN_API_KEY",
+      holderAlphaSource: IS_VERCEL_RUNTIME ? "direct-http" : "local-cli-fallback",
+      runtimeMs: Date.now() - startedAt,
+      walletIndex: null,
+      childProcessUsed: CHILD_PROCESS_USED,
+    };
+    productionLog("Missing GMGN_API_KEY", debug);
+
+    return NextResponse.json(
+      {
+        success: false,
+        error: "GMGN provider credentials are not configured in production.",
+        errorCode: "GMGN_MISSING_API_KEY",
+        requestRunId: runId,
+        ...(exposeDebug ? { debug } : {}),
+      },
+      { status: 500, headers: noStoreHeaders }
     );
   }
 
@@ -345,25 +414,33 @@ export async function GET(request: Request) {
   const analysisMode = parsedMode.analysisMode;
   const effectiveModeConfig = getTop100HolderAlphaModeConfig(analysisMode);
   const forceRefresh = parseBoolean(searchParams.get("forceRefresh"));
+  const defaultWalletMaxPages = IS_VERCEL_RUNTIME ? 4 : DEFAULT_WALLET_MAX_PAGES;
+  const maxWalletMaxPages = IS_VERCEL_RUNTIME ? 8 : MAX_WALLET_MAX_PAGES;
+  const defaultWalletMaxActivities = IS_VERCEL_RUNTIME ? 600 : DEFAULT_WALLET_MAX_ACTIVITIES;
+  const maxWalletMaxActivities = IS_VERCEL_RUNTIME ? 1200 : MAX_WALLET_MAX_ACTIVITIES;
+  const defaultMaxTokens = IS_VERCEL_RUNTIME ? 20 : DEFAULT_MAX_TOKENS;
+  const maxMaxTokens = IS_VERCEL_RUNTIME ? 35 : MAX_TOKENS;
+  const defaultConcurrency = IS_VERCEL_RUNTIME ? 1 : DEFAULT_CONCURRENCY;
+  const maxConcurrency = IS_VERCEL_RUNTIME ? 2 : MAX_CONCURRENCY;
   const walletMaxPages = parseBoundedInteger(
     searchParams.get("walletMaxPages"),
-    DEFAULT_WALLET_MAX_PAGES,
-    MAX_WALLET_MAX_PAGES
+    defaultWalletMaxPages,
+    maxWalletMaxPages
   );
   const walletMaxActivities = parseBoundedInteger(
     searchParams.get("walletMaxActivities"),
-    DEFAULT_WALLET_MAX_ACTIVITIES,
-    MAX_WALLET_MAX_ACTIVITIES
+    defaultWalletMaxActivities,
+    maxWalletMaxActivities
   );
   const maxTokens = parseBoundedInteger(
     searchParams.get("maxTokens"),
-    DEFAULT_MAX_TOKENS,
-    MAX_TOKENS
+    defaultMaxTokens,
+    maxMaxTokens
   );
   const concurrency = parseBoundedInteger(
     searchParams.get("concurrency"),
-    DEFAULT_CONCURRENCY,
-    MAX_CONCURRENCY
+    defaultConcurrency,
+    maxConcurrency
   );
   const interval = searchParams.get("interval") || "1h";
 
@@ -387,14 +464,16 @@ export async function GET(request: Request) {
   let riskPressure: RiskPressureResultV1 | null = null;
   const structuralSafety = null;
 
-  console.log("[Nova V3] Starting Holder Alpha", {
+  productionLog("Starting Holder Alpha", {
     chain,
     address: normalizedAddress,
     analysisMode,
     forceRefresh,
+    failingStep: "holder-alpha-start",
+    runtimeMs: Date.now() - startedAt,
     runId,
   });
-  console.log("[Nova V3] Holder Alpha input config", {
+  productionLog("Holder Alpha input config", {
     chain,
     address: normalizedAddress,
     analysisMode,
@@ -407,6 +486,8 @@ export async function GET(request: Request) {
     interval,
     concurrency,
     forceRefresh,
+    failingStep: "holder-alpha-config",
+    runtimeMs: Date.now() - startedAt,
     runId,
   });
 
@@ -439,13 +520,29 @@ export async function GET(request: Request) {
     }
 
     if (error instanceof Top100HolderAlphaZeroHoldersError) {
+      const debug = {
+        hasGMGNKey: Boolean(process.env.GMGN_API_KEY),
+        failingStep: "top-holders-fetch",
+        sanitizedError: sanitizeError(error),
+        holderAlphaSource: IS_VERCEL_RUNTIME || process.env.GMGN_DIRECT_HTTP === "true"
+          ? "direct-http"
+          : "local-cli-fallback",
+        runtimeMs: Date.now() - holderAlphaStartedAt,
+        walletIndex: null,
+        childProcessUsed: CHILD_PROCESS_USED,
+        sourceDebug: error.debug,
+      };
+      productionLog("Top holders fetched zero rows", debug);
+
       return NextResponse.json(
         {
           success: false,
           error: "Top100 Holder Alpha fetched zero holders.",
-          debug: error.debug,
+          errorCode: "HOLDER_ALPHA_ZERO_HOLDERS",
+          requestRunId: runId,
+          ...(exposeDebug ? { debug } : {}),
         },
-        { status: 500, headers: noStoreHeaders }
+        { status: 502, headers: noStoreHeaders }
       );
     }
 
@@ -454,14 +551,18 @@ export async function GET(request: Request) {
       analysisMode,
       chain,
       error,
+      exposeDebug,
+      runtimeMs: Date.now() - holderAlphaStartedAt,
       requestRunId: runId,
     });
   }
 
-  console.log("[Nova V3] Holder Alpha completed", {
+  productionLog("Holder Alpha completed", {
     runtimeMs: Date.now() - holderAlphaStartedAt,
+    failingStep: null,
     holderCount: holderAlpha?.holderCount,
     analyzedWalletCount: holderAlpha?.analyzedWalletCount,
+    failedWalletCount: holderAlpha?.failedWalletCount,
     deepAnalyzedWalletCount: holderAlpha?.deepAnalyzedWalletCount,
     lightAnalyzedWalletCount: holderAlpha?.lightAnalyzedWalletCount,
     realLightWalletCount: holderAlpha?.realLightWalletCount,
@@ -606,22 +707,38 @@ export async function GET(request: Request) {
   }
 
   if (holderDepthInvariantError) {
-    return holderDepthErrorResponse({
-      requestRunId: runId,
+    const depthWarning = `Holder Alpha depth validation warning: ${holderDepthInvariantError}. Continuing with ${holderAlphaDepth.analyzedWalletCount} analyzed wallet(s).`;
+    warnings.push(depthWarning);
+    productionLog("Holder Alpha depth validation warning", {
+      failingStep: "holder-alpha-depth-validation",
+      sanitizedError: holderDepthInvariantError,
+      runtimeMs: Date.now() - startedAt,
+      walletIndex: null,
       holderAlphaDepth,
-      debug: {
-        stage: "holder-alpha-depth-validation",
-        reason: holderDepthInvariantError,
-        analysisMode,
-        chain,
-        address: normalizedAddress,
-        holderAlphaResultKeys: Object.keys(holderAlpha ?? {}),
-        holderAlphaVersion: holderAlpha?.version ?? null,
-        holderAlphaWarnings: holderAlpha?.warnings?.slice?.(0, 10) ?? [],
-        warnings,
-        holderAlphaAvailable: Boolean(holderAlpha),
-      },
+      holderAlphaExposedRows,
+      warnings: warnings.slice(-5),
     });
+
+    if (holderAlphaDepth.analyzedWalletCount <= 0) {
+      return holderDepthErrorResponse({
+        requestRunId: runId,
+        holderAlphaDepth,
+        debug: {
+          failingStep: "holder-alpha-depth-validation",
+          sanitizedError: holderDepthInvariantError,
+          analysisMode,
+          chain,
+          address: normalizedAddress,
+          holderAlphaResultKeys: Object.keys(holderAlpha ?? {}),
+          holderAlphaVersion: holderAlpha?.version ?? null,
+          holderAlphaWarnings: holderAlpha?.warnings?.slice?.(0, 10) ?? [],
+          warnings,
+          holderAlphaAvailable: Boolean(holderAlpha),
+          runtimeMs: Date.now() - startedAt,
+          childProcessUsed: CHILD_PROCESS_USED,
+        },
+      });
+    }
   }
 
   warnings.push("Structural Safety engine was not computed in Nova Conviction V3 MVP route; its Conviction weight is redistributed.");
@@ -694,6 +811,12 @@ export async function GET(request: Request) {
     debug: {
       holderAlphaDepth,
       holderAlphaExposedRows,
+      hasGMGNKey: Boolean(process.env.GMGN_API_KEY),
+      holderAlphaSource: IS_VERCEL_RUNTIME || process.env.GMGN_DIRECT_HTTP === "true"
+        ? "direct-http"
+        : "local-cli-fallback",
+      childProcessUsed: CHILD_PROCESS_USED,
+      runtimeMs: Date.now() - startedAt,
     },
     warnings: conviction.warnings,
   }, { headers: noStoreHeaders });

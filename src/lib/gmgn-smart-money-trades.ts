@@ -1,8 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
-
 type UnknownRecord = Record<string, unknown>;
 
 export type SmartMoneyTradeSide = "buy" | "sell" | "unknown";
@@ -71,6 +66,8 @@ export type GmgnSmartMoneyTradesResult = {
 const SUPPORTED_SMART_MONEY_CHAINS = ["sol", "bsc", "base", "eth"] as const;
 const MAX_LIMIT = 200;
 const DEFAULT_LIMIT = 100;
+const DEFAULT_GMGN_API_BASE = "https://gmgn.ai";
+const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL);
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -480,6 +477,13 @@ async function runGmgnSmartMoneyTrades({
   side?: "buy" | "sell";
   limit: number;
 }) {
+  if (IS_VERCEL_RUNTIME) {
+    throw new Error("gmgn-cli execution is disabled in Vercel serverless runtime.");
+  }
+
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
   const args = ["track", "smartmoney", "--chain", chain, "--limit", String(limit), "--raw"];
   if (side) {
     args.splice(4, 0, "--side", side);
@@ -501,6 +505,108 @@ async function runGmgnSmartMoneyTrades({
   return parseJsonOutput(stdout);
 }
 
+function gmgnAuthHeaders() {
+  const apiKey = process.env.GMGN_API_KEY || "";
+  const headers: Record<string, string> = {
+    accept: "application/json",
+  };
+
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+    headers["X-API-KEY"] = apiKey;
+    headers["x-api-key"] = apiKey;
+  }
+
+  return headers;
+}
+
+function gmgnApiBaseCandidates() {
+  const configured = process.env.GMGN_API_BASE?.trim();
+  return Array.from(new Set([
+    configured || "",
+    DEFAULT_GMGN_API_BASE,
+    "https://api.gmgn.ai",
+  ].filter(Boolean))).map((base) => base.replace(/\/+$/, ""));
+}
+
+function candidateUrl(base: string, path: string, params: Record<string, string | number | undefined>) {
+  const url = new URL(path, `${base}/`);
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") url.searchParams.set(key, String(value));
+  }
+  return url;
+}
+
+function sanitizeProviderError(message: string) {
+  return message
+    .replace(process.env.GMGN_API_KEY || "__NO_KEY__", "[redacted]")
+    .replace(/https?:\/\/[^\s)]+/g, (url) => {
+      try {
+        const parsed = new URL(url);
+        return `${parsed.origin}${parsed.pathname}`;
+      } catch {
+        return "[url]";
+      }
+    })
+    .slice(0, 360);
+}
+
+async function fetchJsonCandidates(candidates: URL[]) {
+  const failures: string[] = [];
+
+  for (const url of candidates) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12_000);
+
+    try {
+      const response = await fetch(url.toString(), {
+        headers: gmgnAuthHeaders(),
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      let data: unknown = null;
+      if (text.trim()) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          failures.push(`${url.pathname}: non-json response`);
+          continue;
+        }
+      }
+      if (!response.ok) {
+        failures.push(`${url.pathname}: HTTP ${response.status}`);
+        continue;
+      }
+      return data;
+    } catch (error) {
+      failures.push(`${url.pathname}: ${error instanceof Error ? error.message : "unknown error"}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw new Error(`GMGN smart money unavailable via direct HTTP. ${sanitizeProviderError(failures.join("; "))}`);
+}
+
+async function fetchGmgnSmartMoneyTradesDirect({
+  chain,
+  side,
+  limit,
+}: {
+  chain: string;
+  side?: "buy" | "sell";
+  limit: number;
+}) {
+  const candidates = gmgnApiBaseCandidates().flatMap((base) => [
+    candidateUrl(base, `/defi/quotation/v1/smart_money/${chain}`, { side, limit }),
+    candidateUrl(base, `/defi/quotation/v1/smartmoney/${chain}`, { side, limit }),
+    candidateUrl(base, `/api/v1/smart_money/${chain}`, { side, limit }),
+  ]);
+
+  return fetchJsonCandidates(candidates);
+}
+
 export async function fetchGmgnSmartMoneyTrades(
   chain: string,
   options: FetchGmgnSmartMoneyTradesOptions = {}
@@ -509,11 +615,16 @@ export async function fetchGmgnSmartMoneyTrades(
   validateChain(normalizedChain);
   const limit = normalizeLimit(options.limit);
   const side = validateSide(options.side);
-  const raw = await runGmgnSmartMoneyTrades({
-    chain: normalizedChain,
-    side,
-    limit,
-  });
+  const raw = IS_VERCEL_RUNTIME || process.env.GMGN_DIRECT_HTTP === "true"
+    ? await fetchGmgnSmartMoneyTradesDirect({ chain: normalizedChain, side, limit })
+    : await runGmgnSmartMoneyTrades({
+        chain: normalizedChain,
+        side,
+        limit,
+      }).catch((error) => {
+        if (process.env.GMGN_CLI_ONLY === "true") throw error;
+        return fetchGmgnSmartMoneyTradesDirect({ chain: normalizedChain, side, limit });
+      });
   const rawItems = extractTradeArray(raw);
   const warnings: string[] = [];
   const trades = dedupeTrades(rawItems.map((item) => normalizeTrade(normalizedChain, item))).sort(

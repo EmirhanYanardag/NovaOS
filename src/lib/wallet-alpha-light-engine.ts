@@ -1,8 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
-
 type ConfidenceLevel = "low" | "medium" | "high";
 type UnknownRecord = Record<string, unknown>;
 type Period = "30d" | "7d";
@@ -105,6 +100,8 @@ const LIGHT_FORMULA_WITH_DISTRIBUTION =
   "0.30 pnlEfficiency + 0.20 distribution + 0.17 winRate + 0.13 tradeDepth + 0.10 riskControl + 0.06 activity + 0.04 dataCompleteness";
 const LIGHT_FORMULA_NO_DISTRIBUTION =
   "no-distribution formula: 0.42 pnlEfficiency + 0.17 winRate + 0.18 tradeDepth + 0.13 riskControl + 0.06 activity + 0.04 dataCompleteness";
+const DEFAULT_GMGN_API_BASE = "https://gmgn.ai";
+const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL);
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -785,6 +782,13 @@ function computeLightScore(stats: GmgnWalletPnlStats): WalletAlphaLight {
 }
 
 async function runGmgnCli(args: string[]) {
+  if (IS_VERCEL_RUNTIME) {
+    throw new Error("gmgn-cli execution is disabled in Vercel serverless runtime.");
+  }
+
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
   const env = {
     ...process.env,
     GMGN_API_KEY: process.env.GMGN_API_KEY,
@@ -805,6 +809,119 @@ async function runGmgnCli(args: string[]) {
   } catch {
     throw new Error("GMGN portfolio stats command returned non-JSON output.");
   }
+}
+
+function gmgnAuthHeaders() {
+  const apiKey = process.env.GMGN_API_KEY || "";
+  const headers: HeadersInit = {
+    accept: "application/json",
+  };
+
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+    headers["X-API-KEY"] = apiKey;
+    headers["x-api-key"] = apiKey;
+  }
+
+  return headers;
+}
+
+function gmgnApiBaseCandidates() {
+  const configured = process.env.GMGN_API_BASE?.trim();
+  return Array.from(new Set([
+    configured || "",
+    DEFAULT_GMGN_API_BASE,
+    "https://api.gmgn.ai",
+  ].filter(Boolean))).map((base) => base.replace(/\/+$/, ""));
+}
+
+function candidateUrl(base: string, path: string, params: Record<string, string | number | undefined>) {
+  const url = new URL(path, `${base}/`);
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") url.searchParams.set(key, String(value));
+  }
+  return url;
+}
+
+function sanitizeProviderError(message: string) {
+  return message
+    .replace(process.env.GMGN_API_KEY || "__NO_KEY__", "[redacted]")
+    .replace(/https?:\/\/[^\s)]+/g, (url) => {
+      try {
+        const parsed = new URL(url);
+        return `${parsed.origin}${parsed.pathname}`;
+      } catch {
+        return "[url]";
+      }
+    })
+    .slice(0, 360);
+}
+
+async function fetchJsonCandidates({
+  candidates,
+  source,
+}: {
+  candidates: URL[];
+  source: string;
+}) {
+  const failures: string[] = [];
+
+  for (const url of candidates) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12_000);
+
+    try {
+      const response = await fetch(url.toString(), {
+        headers: gmgnAuthHeaders(),
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      let data: unknown = null;
+
+      if (text.trim()) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          failures.push(`${url.pathname}: non-json response`);
+          continue;
+        }
+      }
+
+      if (!response.ok) {
+        failures.push(`${url.pathname}: HTTP ${response.status}`);
+        continue;
+      }
+
+      return data;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "unknown error";
+      failures.push(`${url.pathname}: ${reason}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw new Error(`${source} unavailable via direct GMGN HTTP. ${sanitizeProviderError(failures.join("; "))}`);
+}
+
+async function fetchGmgnWalletPnlStatsDirect({
+  chain,
+  wallet,
+  period,
+}: {
+  chain: string;
+  wallet: string;
+  period: Period;
+}) {
+  const candidates = gmgnApiBaseCandidates().flatMap((base) => [
+    candidateUrl(base, `/defi/quotation/v1/wallet/portfolio_stats/${chain}/${wallet}`, { period }),
+    candidateUrl(base, `/defi/quotation/v1/wallet/portfolio/stats/${chain}/${wallet}`, { period }),
+    candidateUrl(base, `/defi/quotation/v1/wallet/${chain}/${wallet}/portfolio_stats`, { period }),
+    candidateUrl(base, `/api/v1/wallet/portfolio_stats/${chain}/${wallet}`, { period }),
+  ]);
+
+  return fetchJsonCandidates({ candidates, source: "GMGN portfolio stats" });
 }
 
 function statsLooksUsable(stats: GmgnWalletPnlStats) {
@@ -837,8 +954,16 @@ async function fetchGmgnWalletPnlStats({
     const args = ["portfolio", "stats", "--chain", chain, "--wallet", wallet, "--period", candidatePeriod];
 
     try {
-      const raw = await runGmgnCli(args);
-      const sourceCommand = `gmgn-cli ${args.join(" ")}`;
+      const useDirect = IS_VERCEL_RUNTIME || process.env.GMGN_DIRECT_HTTP === "true";
+      const raw = useDirect
+        ? await fetchGmgnWalletPnlStatsDirect({ chain, wallet, period: candidatePeriod })
+        : await runGmgnCli(args).catch((error) => {
+            if (process.env.GMGN_CLI_ONLY === "true") throw error;
+            return fetchGmgnWalletPnlStatsDirect({ chain, wallet, period: candidatePeriod });
+          });
+      const sourceCommand = useDirect
+        ? `gmgn-direct portfolio stats ${chain}/${wallet} ${candidatePeriod}`
+        : `gmgn-cli ${args.join(" ")}`;
       const stats = normalizeGmgnWalletPnlStats({
         wallet,
         chain,
@@ -850,7 +975,10 @@ async function fetchGmgnWalletPnlStats({
       if (statsLooksUsable(stats)) return stats;
       failures.push(`${sourceCommand}: response did not include usable PnL fields`);
     } catch (error) {
-      failures.push(`gmgn-cli ${args.join(" ")}: ${error instanceof Error ? error.message : "unknown error"}`);
+      const source = IS_VERCEL_RUNTIME || process.env.GMGN_DIRECT_HTTP === "true"
+        ? "gmgn-direct portfolio stats"
+        : `gmgn-cli ${args.join(" ")}`;
+      failures.push(`${source}: ${error instanceof Error ? error.message : "unknown error"}`);
     }
   }
 
