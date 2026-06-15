@@ -3,6 +3,7 @@ import { GmgnDirectNonJsonError } from "@/lib/gmgn";
 import { fetchGmgnRiskStats, type GmgnRiskStats } from "@/lib/gmgn-risk-stats";
 import { fetchGmgnSmartMoneyTrades } from "@/lib/gmgn-smart-money-trades";
 import { computeNovaConvictionV3 } from "@/lib/nova-conviction-v3-engine";
+import { loadPrecomputedNovaV3Scan } from "@/lib/precomputed-scans";
 import {
   computeRiskPressureV1,
   type RiskPressureHolderAlphaContext,
@@ -46,6 +47,7 @@ const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL);
 const CHILD_PROCESS_USED = !IS_VERCEL_RUNTIME && process.env.GMGN_DIRECT_HTTP !== "true";
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const SOL_ADDRESS_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const GMGN_PRODUCTION_BLOCKED_REASON = "GMGN production HTTP blocked by Cloudflare";
 
 type HolderAlphaDepth = {
   analysisMode: AnalysisMode;
@@ -263,6 +265,90 @@ function gmgnTopHoldersNonJsonResponse({
       errorCode: "GMGN_TOP_HOLDERS_NON_JSON",
       requestRunId,
       diagnostics: sanitizedDiagnostics,
+    },
+    { status: 502, headers: noStoreHeaders }
+  );
+}
+
+async function gmgnBlockedWithPrecomputedFallbackResponse({
+  address,
+  analysisMode,
+  chain,
+  error,
+  requestRunId,
+  runtimeMs,
+}: {
+  address: string;
+  analysisMode: AnalysisMode;
+  chain: string;
+  error: GmgnDirectNonJsonError;
+  requestRunId: string | null;
+  runtimeMs: number;
+}) {
+  const diagnostic = error.diagnostics;
+
+  productionLog("GMGN production blocked; checking precomputed scan cache", {
+    failingStep: diagnostic.failingStep,
+    sanitizedError: diagnostic.responseClassification,
+    runtimeMs,
+    walletIndex: null,
+    baseUsed: diagnostic.baseUsed,
+    endpointPath: diagnostic.endpointPath,
+    status: diagnostic.status,
+    contentType: diagnostic.contentType,
+    responsePreview: diagnostic.responsePreview,
+    chain,
+    address,
+    analysisMode,
+    runId: requestRunId,
+  });
+
+  const cachedScan = await loadPrecomputedNovaV3Scan({
+    address,
+    analysisMode,
+    chain,
+    fallbackReason: GMGN_PRODUCTION_BLOCKED_REASON,
+    requestRunId,
+  });
+
+  if (cachedScan) {
+    productionLog("Serving precomputed real Nova V3 scan", {
+      failingStep: null,
+      runtimeMs,
+      walletIndex: null,
+      chain,
+      address,
+      analysisMode,
+      dataSource: "precomputed-real-scan",
+      productionFallback: true,
+      runId: requestRunId,
+    });
+
+    return NextResponse.json(cachedScan, { headers: noStoreHeaders });
+  }
+
+  productionLog("GMGN production blocked and no precomputed scan exists", {
+    failingStep: diagnostic.failingStep,
+    sanitizedError: diagnostic.responseClassification,
+    runtimeMs,
+    walletIndex: null,
+    chain,
+    address,
+    analysisMode,
+    baseUsed: diagnostic.baseUsed,
+    endpointPath: diagnostic.endpointPath,
+    status: diagnostic.status,
+    contentType: diagnostic.contentType,
+    runId: requestRunId,
+  });
+
+  return NextResponse.json(
+    {
+      success: false,
+      errorCode: "GMGN_PRODUCTION_BLOCKED_NO_CACHE",
+      message: "GMGN production HTTP is blocked and no real precomputed scan exists for this token.",
+      error: "GMGN production HTTP is blocked and no real precomputed scan exists for this token.",
+      requestRunId,
     },
     { status: 502, headers: noStoreHeaders }
   );
@@ -548,6 +634,17 @@ export async function GET(request: Request) {
     warnings.push(...holderAlpha.warnings);
   } catch (error) {
     if (error instanceof GmgnDirectNonJsonError) {
+      if (IS_VERCEL_RUNTIME) {
+        return gmgnBlockedWithPrecomputedFallbackResponse({
+          address: normalizedAddress,
+          analysisMode,
+          chain,
+          error,
+          requestRunId: runId,
+          runtimeMs: Date.now() - holderAlphaStartedAt,
+        });
+      }
+
       return gmgnTopHoldersNonJsonResponse({
         error,
         requestRunId: runId,

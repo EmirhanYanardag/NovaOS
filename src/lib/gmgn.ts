@@ -621,6 +621,7 @@ async function fetchJsonCandidates({
   source: string;
 }) {
   const failures: string[] = [];
+  let topHoldersNonJsonDiagnostic: GmgnDirectFailureDiagnostic | null = null;
 
   for (const url of candidates) {
     const controller = new AbortController();
@@ -655,7 +656,7 @@ async function fetchJsonCandidates({
           const diagnostic = directFailureDiagnostic(diagnosticBase);
           logDirectDiagnostic(diagnostic);
           if (failingStep === "top-holders") {
-            throw new GmgnDirectNonJsonError("GMGN top holders returned non-JSON response.", diagnostic);
+            topHoldersNonJsonDiagnostic ??= diagnostic;
           }
           failures.push(`${url.pathname}: non-json response (${diagnostic.responseClassification})`);
           continue;
@@ -687,6 +688,13 @@ async function fetchJsonCandidates({
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  if (topHoldersNonJsonDiagnostic) {
+    throw new GmgnDirectNonJsonError(
+      "GMGN top holders returned non-JSON response.",
+      topHoldersNonJsonDiagnostic
+    );
   }
 
   throw new Error(`${source} unavailable via direct GMGN HTTP. ${sanitizeProviderError(failures.join("; "))}`);
