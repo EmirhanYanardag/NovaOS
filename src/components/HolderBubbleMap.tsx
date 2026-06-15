@@ -67,30 +67,30 @@ const MIN_Y = 45;
 const MAX_Y = 635;
 
 const GROUP_COLORS: BubbleColor[] = [
-  color("cyan", "34,211,238"),
-  color("amber", "249,115,22"),
-  color("violet", "168,85,247"),
-  color("blue", "96,165,250"),
-  color("rose", "251,113,133"),
-  color("emerald", "52,211,153"),
+  color("steel", "83,104,120"),
+  color("slate", "94,114,107"),
+  color("deep", "121,134,123"),
+  color("muted", "178,190,181"),
+  color("risk", "83,104,120"),
+  color("safe", "94,114,107"),
 ];
 
 const COLOR_ALIASES: Record<string, string> = {
-  blue: "blue",
-  cyan: "cyan",
+  blue: "muted",
+  cyan: "steel",
   gray: "isolated",
-  green: "emerald",
-  purple: "violet",
+  green: "safe",
+  purple: "deep",
   red: "rose",
 };
 
 const ISOLATED_COLOR: BubbleColor = {
-  dot: "rgba(148,163,184,0.58)",
-  fill: "rgba(148,163,184,0.055)",
-  glow: "drop-shadow(0 0 6px rgba(148,163,184,0.08))",
+  dot: "rgba(178,190,181,0.48)",
+  fill: "rgba(83,104,120,0.055)",
+  glow: "drop-shadow(0 0 6px rgba(83,104,120,0.08))",
   key: "isolated",
-  line: "rgba(148,163,184,0.12)",
-  stroke: "rgba(203,213,225,0.26)",
+  line: "rgba(83,104,120,0.12)",
+  stroke: "rgba(83,104,120,0.22)",
 };
 
 export default function HolderBubbleMap({
@@ -118,12 +118,12 @@ export default function HolderBubbleMap({
 
   if (nodes.length === 0) {
     return (
-      <div className="relative flex h-[680px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-[#05070b] px-8 text-center">
+      <div className="relative flex h-[680px] w-full items-center justify-center overflow-hidden rounded-2xl border border-[color:var(--nova-border)] bg-[var(--nova-bg-soft)] px-8 text-center">
         <div>
-          <p className="text-lg font-medium tracking-[-0.04em] text-white/72">
+          <p className="text-lg font-medium tracking-[-0.04em] text-[color:var(--nova-text-soft)]">
             Holder Bubble Map requires analyzed holder data.
           </p>
-          <p className="mx-auto mt-2 max-w-xl text-sm leading-relaxed text-white/38">
+          <p className="mx-auto mt-2 max-w-xl text-sm leading-relaxed text-[color:var(--nova-text-muted)]">
             NovaOS will render the holder map after real holder rows are available.
           </p>
         </div>
@@ -132,9 +132,8 @@ export default function HolderBubbleMap({
   }
 
   return (
-    <div className="relative h-[680px] w-full overflow-hidden rounded-2xl border border-white/10 bg-[#05070b] shadow-[0_28px_110px_rgba(0,0,0,0.34)]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_18%,rgba(34,211,238,0.065),transparent_32%),radial-gradient(circle_at_78%_62%,rgba(249,115,22,0.055),transparent_30%),radial-gradient(circle_at_48%_86%,rgba(148,163,184,0.035),transparent_34%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.007)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.007)_1px,transparent_1px)] bg-[size:84px_84px]" />
+    <div className="relative h-[680px] w-full overflow-hidden rounded-2xl border border-[color:var(--nova-border)] bg-[var(--nova-bg-soft)] shadow-[0_28px_110px_rgba(0,0,0,0.34)]">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_18%,rgba(83,104,120,0.1),transparent_32%),radial-gradient(circle_at_78%_62%,rgba(94,114,107,0.1),transparent_30%),radial-gradient(circle_at_48%_86%,rgba(94,114,107,0.1),transparent_34%)]" />
 
       <svg
         aria-label={`${tokenSymbol} holder bubble map`}
@@ -182,7 +181,7 @@ export default function HolderBubbleMap({
                   fill="none"
                   opacity={opacity * 0.62}
                   r={(bubble.diameter / 2) * scale + 4}
-                  stroke="rgba(248,113,113,0.34)"
+                  stroke="rgba(83,104,120,0.34)"
                   strokeWidth="1"
                 />
               )}
@@ -214,7 +213,7 @@ export default function HolderBubbleMap({
                   r={(bubble.diameter / 2) * scale}
                   stroke={
                     selected
-                      ? "rgba(240,253,255,0.95)"
+                      ? "rgba(231,238,245,0.86)"
                       : hovered || related
                         ? bubble.color.stroke.replace("0.62", "0.82")
                         : bubble.color.stroke
@@ -236,7 +235,7 @@ export default function HolderBubbleMap({
               </g>
               {showWalletLabel && (
                 <text
-                  fill="rgba(235,250,255,0.62)"
+                  fill="rgba(170,183,196,0.76)"
                   fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
                   fontSize="11"
                   pointerEvents="none"
@@ -252,16 +251,16 @@ export default function HolderBubbleMap({
         })}
       </svg>
 
-      <div className="pointer-events-none absolute left-5 top-5 z-20 flex items-center gap-2 rounded-full border border-white/10 bg-black/35 px-3 py-2 backdrop-blur-xl">
+      <div className="pointer-events-none absolute left-5 top-5 z-20 flex items-center gap-2 rounded-full nova-card-inner px-3 py-2 backdrop-blur-xl">
         {tokenLogoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img alt={tokenSymbol} className="h-7 w-7 rounded-full object-cover" src={tokenLogoUrl} />
         ) : (
-          <span className="flex h-7 w-7 items-center justify-center rounded-full border border-cyan-100/14 bg-cyan-100/[0.04] text-xs font-semibold text-cyan-100/72">
+          <span className="flex h-7 w-7 items-center justify-center rounded-full nova-card-inner text-xs font-semibold text-[color:var(--nova-accent)]">
             {tokenSymbol.replace("$", "").slice(0, 2)}
           </span>
         )}
-        <span className="text-xs font-medium text-white/46">{tokenSymbol}</span>
+        <span className="text-xs font-medium text-[color:var(--nova-text-soft)]">{tokenSymbol}</span>
       </div>
     </div>
   );
@@ -502,11 +501,11 @@ function isMajorHolder(node: HolderBubbleMapNode) {
 }
 
 function behaviorDotColor(node: PositionedBubble) {
-  if ((node.activityScore || 0) >= 70) return "rgba(125,211,252,0.72)";
+  if ((node.activityScore || 0) >= 70) return "rgba(83,104,120,0.72)";
   if ((node.concentrationScore || 0) >= 70 || node.riskContribution >= 70) {
-    return "rgba(248,113,113,0.68)";
+    return "rgba(83,104,120,0.68)";
   }
-  if (node.category === "fresh") return "rgba(147,197,253,0.64)";
+  if (node.category === "fresh") return "rgba(178,190,181,0.64)";
   return node.color.dot;
 }
 
@@ -528,7 +527,7 @@ function color(key: string, rgb: string): BubbleColor {
   return {
     dot: `rgba(${rgb},0.72)`,
     fill: `rgba(${rgb},0.12)`,
-    glow: `drop-shadow(0 0 13px rgba(${rgb},0.2))`,
+    glow: `drop-shadow(0 0 10px rgba(${rgb},0.12))`,
     key,
     line: `rgba(${rgb},0.34)`,
     stroke: `rgba(${rgb},0.62)`,

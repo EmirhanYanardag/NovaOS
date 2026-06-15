@@ -1,6 +1,6 @@
 "use client";
 
-import { animate, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { Globe, Send } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -43,7 +43,6 @@ import {
   calculateTokenFlowSummaryV2,
   calculateWalletFlowV2,
   type TokenFlowSummaryV2,
-  type WalletFlowV2Result,
 } from "../../lib/wallet-flow-math";
 import {
   calculateHolderIntelligenceMatrix,
@@ -58,6 +57,14 @@ import {
 } from "../../lib/insider-math";
 import HolderBubbleMap from "@/components/HolderBubbleMap";
 import NovaChart from "../components/NovaChart";
+
+type AnalysisStage = {
+  label: string;
+  progress: number;
+};
+
+type AnalysisDepthMode = "fast" | "balanced" | "deep";
+type SelectedAnalysisDepthMode = AnalysisDepthMode | null;
 
 type TokenResult = {
   symbol: string;
@@ -157,10 +164,7 @@ type TerminalSection =
   | "AI vs Human"
   | "Bubble Intelligence"
   | "Wallet Flows"
-  | "Insider Scan"
-  | "Social Feed"
-  | "Signals"
-  | "Watchlist";
+  | "Insider Scan";
 
 type WalletBehaviorProfile = {
   walletAddress: string;
@@ -635,34 +639,102 @@ type UnifiedTokenAnalysisData = {
   warnings?: string[];
 };
 
-type WatchlistItem = {
-  id: string;
-  tokenSymbol: string;
-  tokenName: string;
-  tokenLogo: string;
+type NovaAnalysisMode = "fast" | "balanced" | "deep";
+type NovaSupportedChain = "eth" | "sol" | "bsc" | "base";
+
+type ActiveNovaScan = {
+  runId: string;
+  chain: NovaSupportedChain;
+  address: string;
+  symbol?: string;
+  analysisMode: NovaAnalysisMode;
+  startedAt: number;
+  expectedDurationLabel: string;
+};
+
+type NovaConvictionResult = {
+  success: boolean;
+  version: string;
+  requestRunId?: string | null;
   chain: string;
-  dex: string;
+  address: string;
+  analysisMode: NovaAnalysisMode;
+  runtimeMs?: number;
+  novaConvictionScore: number | null;
+  convictionTier: string | null;
+  scores: {
+    holderAlpha: number | null;
+    smartMoneyFlow: number | null;
+    structuralSafety: number | null;
+    riskPressure: number | null;
+    liquidityHealth: number | null;
+    dataConfidence: number | null;
+  };
+  risk: {
+    riskScore: number | null;
+    riskTier: string | null;
+    riskDrivers?: string[];
+  };
+  thesis: {
+    summary?: string;
+    bullishPoints?: string[];
+    bearishPoints?: string[];
+    neutralPoints?: string[];
+    finalInterpretation?: string;
+  };
+  scoreBreakdown?: unknown;
+  moduleSummaries?: Record<string, unknown>;
+  holderAlphaDepth?: unknown;
+  debug?: Record<string, unknown>;
+  warnings?: string[];
+};
+
+class NovaAnalysisRequestError extends Error {
+  status: number;
+  data: unknown;
+
+  constructor(message: string, status: number, data: unknown) {
+    super(message);
+    this.name = "NovaAnalysisRequestError";
+    this.status = status;
+    this.data = data;
+  }
+}
+
+const COMPLETED_NOVA_ANALYSIS_STORAGE_KEY = "novaos.completedNovaV3Analysis.v1";
+const LAST_TOKEN_STORAGE_KEY = "novaos:lastToken";
+const LAST_ANALYSIS_MODE_STORAGE_KEY = "novaos:lastAnalysisMode";
+const LAST_NOVA_RESPONSE_STORAGE_KEY = "novaos:lastNovaConvictionResponse";
+const LAST_ANALYSIS_TIMESTAMP_STORAGE_KEY = "novaos:lastAnalysisTimestamp";
+const STORED_NOVA_ANALYSIS_FRESH_MS = 10 * 60_000;
+
+type CompletedNovaAnalysisSnapshot = {
+  token: TokenResult;
+  analysisMode: AnalysisDepthMode;
+  novaConviction: NovaConvictionResult;
+  timestamp: string;
+};
+
+type StoredNovaAnalysisPayload = {
   tokenAddress: string;
-  pairAddress: string;
-  price: string;
-  marketCap: string;
-  liquidity: string;
-  volume24h: string;
-  priceChange24h?: number;
-  finalConviction?: number;
-  finalConvictionV1?: number;
-  finalConvictionV3?: number;
-  primaryFormula?: "V3" | "V1";
-  dataConfidence?: string;
-  holderIntegrity?: number;
-  walletQuality?: number;
-  riskProtection?: number;
-  insiderRisk?: number;
-  bundleRisk?: number;
-  clusterRisk?: number;
-  latestSignalVerdict?: string;
-  addedAt: string;
-  lastUpdatedAt: string;
+  chain: NovaSupportedChain;
+  analysisMode: AnalysisDepthMode;
+  runId: string;
+  timestamp: number;
+  response: NovaConvictionResult;
+};
+
+type HolderAlphaDepthSnapshot = {
+  analysisMode: unknown;
+  holderCount: number;
+  analyzedWalletCount: number;
+  failedWalletCount: number;
+  deepHolderLimit: number;
+  lightHolderLimit: number;
+  deepAnalyzedWalletCount: number;
+  lightAnalyzedWalletCount: number;
+  realLightWalletCount: number;
+  fallbackLightWalletCount: number;
 };
 
 type FormulaValidationOutcome =
@@ -732,27 +804,20 @@ type ArenaVoteEntry = {
   resolvedAt?: string;
 };
 
-const thesisText =
-  "Holder Intelligence V1 uses live holder rankings, balances and ownership percentages. Behavioral metrics will be unlocked in Wallet Behavior Engine V2.";
 const DEV_CACHE_PANEL = process.env.NODE_ENV !== "production";
 const SHOW_INTERNAL_FORMULA_VALIDATION_TOOLS = false;
 const SHOW_INTERNAL_DEVELOPER_DIAGNOSTICS = false;
 const CONVICTION_HISTORY_STORAGE_KEY = "novaos.convictionHistory.v2";
 const CONVICTION_HISTORY_MAX_SNAPSHOTS = 100;
-const WATCHLIST_STORAGE_KEY = "novaos.watchlist.v1";
 const FORMULA_VALIDATION_STORAGE_KEY = "novaos.formulaValidation.v1";
 const FORMULA_VALIDATION_MAX_SNAPSHOTS = 200;
 const AI_HUMAN_ARENA_STORAGE_KEY = "novaos.aiHumanArena.v1";
-
 const terminalSections: TerminalSection[] = [
   "Overview",
   "Conviction Engine",
   "AI vs Human",
   "Wallet Flows",
   "Insider Scan",
-  "Social Feed",
-  "Signals",
-  "Watchlist",
 ];
 
 const overviewHolderGridClass =
@@ -762,20 +827,32 @@ const insiderPreviewGridClass =
 const fullHolderGridClass =
   "grid-cols-[minmax(150px,1.35fr)_minmax(90px,0.75fr)_minmax(130px,1fr)_minmax(110px,0.8fr)_minmax(80px,0.55fr)]";
 const terminalSurfaceClass =
-  "rounded-[2rem] border border-white/10 bg-white/[0.03] shadow-[0_24px_90px_rgba(0,0,0,0.24)] backdrop-blur-2xl";
+  "nova-card nova-glass-hover rounded-[1.95rem]";
 const terminalHeaderSurfaceClass =
-  "relative overflow-hidden rounded-[2rem] border border-white/10 bg-[#06090d]/92 p-5 shadow-[0_24px_90px_rgba(0,0,0,0.28)] backdrop-blur-2xl";
+  "nova-card-strong relative overflow-hidden rounded-[2rem] p-5";
 const terminalEyebrowClass =
-  "text-xs uppercase tracking-[0.28em] text-cyan-100/42";
+  "nova-tech text-xs text-[color:var(--nova-accent-soft)]";
 const terminalTitleClass =
-  "text-3xl font-semibold tracking-[-0.06em] text-white/90";
-const terminalSubtitleClass = "text-sm leading-relaxed text-white/42";
+  "nova-display text-3xl text-[color:var(--nova-text)]";
+const terminalSubtitleClass = "nova-copy text-sm leading-relaxed text-[color:var(--nova-text-soft)]";
 const terminalMethodologyClass =
-  "rounded-[2rem] border border-white/10 bg-white/[0.03] p-5 text-sm leading-relaxed text-white/42 backdrop-blur-2xl";
+  "nova-card rounded-[1.95rem] p-5 text-sm leading-relaxed text-[color:var(--nova-text-soft)]";
+const terminalGlassCardClass =
+  "nova-card-inner";
+const overviewScoreCardSurfaceClass =
+  "border border-[rgba(178,190,181,0.09)] bg-[linear-gradient(135deg,rgba(10,10,10,0.58),rgba(16,18,19,0.74),rgba(83,104,120,0.06))] shadow-[0_18px_54px_rgba(0,0,0,0.22)]";
 const terminalTableHeaderClass =
-  "border-b border-white/10 bg-black/35 px-4 py-3 text-[10px] uppercase tracking-[0.12em] text-white/36";
+  "border-b border-[color:var(--nova-border)] bg-[rgba(10,10,10,0.62)] px-4 py-3 text-[10px] uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)] backdrop-blur-2xl";
 const terminalRowClass =
-  "border-b border-white/[0.055] px-4 py-3 text-sm transition last:border-b-0 hover:bg-cyan-100/[0.025]";
+  "border-b border-[color:var(--nova-border)] px-4 py-3 text-sm transition duration-300 last:border-b-0 hover:rounded-2xl hover:bg-[rgba(83,104,120,0.42)] hover:shadow-[inset_0_1px_0_rgba(229,228,226,0.055)]";
+
+const novaScanMessages = [
+  "Building Conviction Model",
+  "Evaluating Holder Quality",
+  "Processing Wallet Intelligence",
+  "Mapping Smart Capital",
+  "Measuring Structural Risk",
+];
 
 type TerminalBadgeTone =
   | "cyan"
@@ -787,22 +864,205 @@ type TerminalBadgeTone =
 
 function chainLabel(chain: string) {
   const key = chain.toLowerCase();
+  if (key === "eth") return "ETH";
   if (key === "ethereum") return "ETH";
   if (key === "base") return "BASE";
   if (key === "mantle") return "MANTLE";
+  if (key === "sol") return "SOL";
   if (key === "solana") return "SOL";
   if (key === "bsc") return "BSC";
+  if (key === "bnb") return "BSC";
   return chain.toUpperCase();
 }
 
 function chainName(chain: string) {
   const key = chain.toLowerCase();
+  if (key === "eth") return "Ethereum";
   if (key === "ethereum") return "Ethereum";
   if (key === "base") return "Base";
   if (key === "mantle") return "Mantle";
+  if (key === "sol") return "Solana";
   if (key === "solana") return "Solana";
   if (key === "bsc") return "BNB Chain";
+  if (key === "bnb") return "BNB Chain";
   return chain;
+}
+
+function normalizeChainForNova(chain?: string): NovaSupportedChain {
+  const value = String(chain || "").toLowerCase().trim();
+
+  if (["eth", "ethereum", "ether", "erc20"].includes(value)) return "eth";
+  if (["sol", "solana"].includes(value)) return "sol";
+  if (["bsc", "bnb", "binance", "binance-smart-chain"].includes(value)) {
+    return "bsc";
+  }
+  if (["base", "basechain"].includes(value)) return "base";
+
+  return "eth";
+}
+
+function normalizeTokenResultForNova(result: TokenResult): TokenResult {
+  return {
+    ...result,
+    chain: normalizeChainForNova(result.chain),
+  };
+}
+
+function clearStoredNovaAnalysis() {
+  if (typeof window === "undefined") return;
+
+  window.sessionStorage.removeItem(LAST_TOKEN_STORAGE_KEY);
+  window.sessionStorage.removeItem(LAST_ANALYSIS_MODE_STORAGE_KEY);
+  window.sessionStorage.removeItem(LAST_NOVA_RESPONSE_STORAGE_KEY);
+  window.sessionStorage.removeItem(LAST_ANALYSIS_TIMESTAMP_STORAGE_KEY);
+  window.sessionStorage.removeItem(COMPLETED_NOVA_ANALYSIS_STORAGE_KEY);
+}
+
+function createNovaRunId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function readNumericDepthField(value: unknown) {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim()
+      ? Number(value)
+      : 0;
+
+  return Number.isFinite(numeric) ? numeric : Number.NaN;
+}
+
+function extractHolderAlphaDepth(data: unknown): HolderAlphaDepthSnapshot | null {
+  const response = readRecord(data);
+  const debug = readRecord(response?.debug);
+  const moduleSummaries = readRecord(response?.moduleSummaries);
+  const holderAlpha = readRecord(moduleSummaries?.holderAlpha);
+  const candidates = [
+    response?.holderAlphaDepth,
+    debug?.holderAlphaDepth,
+    holderAlpha?.holderAlphaDepth,
+    holderAlpha,
+  ];
+
+  for (const candidate of candidates) {
+    const record = readRecord(candidate);
+    if (!record) continue;
+
+    const depth = {
+      analysisMode: record.analysisMode,
+      holderCount: readNumericDepthField(record.holderCount),
+      analyzedWalletCount: readNumericDepthField(record.analyzedWalletCount),
+      failedWalletCount: readNumericDepthField(record.failedWalletCount),
+      deepHolderLimit: readNumericDepthField(record.deepHolderLimit),
+      lightHolderLimit: readNumericDepthField(record.lightHolderLimit),
+      deepAnalyzedWalletCount: readNumericDepthField(
+        record.deepAnalyzedWalletCount
+      ),
+      lightAnalyzedWalletCount: readNumericDepthField(
+        record.lightAnalyzedWalletCount
+      ),
+      realLightWalletCount: readNumericDepthField(record.realLightWalletCount),
+      fallbackLightWalletCount: readNumericDepthField(
+        record.fallbackLightWalletCount
+      ),
+    };
+
+    if (
+      Number.isFinite(depth.deepAnalyzedWalletCount) &&
+      Number.isFinite(depth.lightAnalyzedWalletCount) &&
+      depth.analysisMode
+    ) {
+      return depth;
+    }
+  }
+
+  return null;
+}
+
+function holderAlphaDepthError(
+  data: NovaConvictionResult,
+  requestedMode: NovaAnalysisMode
+) {
+  if (data.success !== true || data.version !== "nova-conviction-v3") {
+    return "Analysis response was not a valid Nova Conviction V3 result.";
+  }
+
+  const holderAlpha = readRecord(data.moduleSummaries?.holderAlpha);
+  if (!holderAlpha) {
+    return "Holder intelligence depth did not execute correctly. Please retry after a short cooldown.";
+  }
+
+  const extractedDepth = extractHolderAlphaDepth(data);
+  const returnedMode = String(extractedDepth?.analysisMode || "")
+    .toLowerCase()
+    .trim();
+  const normalizedRequestedMode = String(requestedMode).toLowerCase().trim();
+
+  if (!extractedDepth) {
+    return "Holder intelligence depth did not execute correctly. Please retry after a short cooldown.";
+  }
+
+  if (returnedMode !== normalizedRequestedMode) {
+    return "Analysis response did not match the requested analysis mode.";
+  }
+
+  if (normalizedRequestedMode === "fast") {
+    if (
+      extractedDepth.deepAnalyzedWalletCount < 1 ||
+      extractedDepth.lightAnalyzedWalletCount < 1
+    ) {
+      return "Holder intelligence depth did not execute correctly. Please retry after a short cooldown.";
+    }
+  }
+
+  if (normalizedRequestedMode === "balanced") {
+    if (
+      extractedDepth.deepAnalyzedWalletCount < 1 ||
+      extractedDepth.lightAnalyzedWalletCount < 1
+    ) {
+      return "Holder intelligence depth did not execute correctly. Please retry after a short cooldown.";
+    }
+  }
+
+  if (normalizedRequestedMode === "deep") {
+    if (
+      extractedDepth.deepAnalyzedWalletCount < 1 ||
+      extractedDepth.lightAnalyzedWalletCount !== 0
+    ) {
+      return "Holder intelligence depth did not execute correctly. Please retry after a short cooldown.";
+    }
+  }
+
+  return "";
+}
+
+function logHolderDepthValidationFailure({
+  data,
+  extractedDepth,
+  requestedMode,
+}: {
+  data: unknown;
+  extractedDepth: HolderAlphaDepthSnapshot | null;
+  requestedMode: NovaAnalysisMode;
+}) {
+  if (process.env.NODE_ENV === "production") return;
+
+  const response = readRecord(data);
+  const moduleSummaries = readRecord(response?.moduleSummaries);
+  const holderAlpha = readRecord(moduleSummaries?.holderAlpha);
+  const debug = readRecord(response?.debug);
+
+  console.error("[NovaOS] Holder depth validation failed", {
+    requestedMode,
+    dataSuccess: response?.success,
+    version: response?.version,
+    extractedDepth,
+    holderAlphaKeys: Object.keys(holderAlpha ?? {}),
+    topLevelKeys: Object.keys(response ?? {}),
+    debugDepth: debug?.holderAlphaDepth,
+    topLevelDepth: response?.holderAlphaDepth,
+  });
 }
 
 function isMantleChain(chain: string) {
@@ -811,8 +1071,8 @@ function isMantleChain(chain: string) {
 }
 
 function changeClass(value?: number) {
-  if (!value) return "text-white/35";
-  return value >= 0 ? "text-emerald-100/70" : "text-red-100/70";
+  if (!value) return "text-[color:var(--nova-text-muted)]";
+  return value >= 0 ? "text-[color:var(--nova-success)]" : "text-[color:var(--nova-danger)]";
 }
 
 function resolveTokenLogo(tokenData: TokenResult) {
@@ -901,6 +1161,92 @@ function apiErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function novaModeExpectedDurationLabel(mode: AnalysisDepthMode) {
+  if (mode === "fast") return "4-7 minutes";
+  if (mode === "deep") return "35-50 minutes";
+  return "10-18 minutes";
+}
+
+const ANALYSIS_MODE_COPY: Record<
+  AnalysisDepthMode,
+  { label: string; detail: string }
+> = {
+  fast: {
+    label: "Fast",
+    detail: "Top holders are checked with a lighter research pass for quicker results.",
+  },
+  balanced: {
+    label: "Balanced",
+    detail: "A wider holder sample is reviewed for stronger conviction context.",
+  },
+  deep: {
+    label: "Deep",
+    detail: "More holder behavior is evaluated for a deeper research profile.",
+  },
+};
+
+function novaModeProgressDurationMs(mode: AnalysisDepthMode) {
+  if (mode === "fast") return 5 * 60_000;
+  if (mode === "deep") return 40 * 60_000;
+  return 15 * 60_000;
+}
+
+function isGmgnRateLimitText(value: unknown) {
+  const text = JSON.stringify(value ?? "").toLowerCase();
+  return (
+    text.includes("http 429") ||
+    text.includes("rate_limit") ||
+    text.includes("rate limit") ||
+    text.includes("temporarily banned") ||
+    text.includes("rate limit resets")
+  );
+}
+
+function isGmgnRateLimitError(error: unknown) {
+  if (error instanceof NovaAnalysisRequestError) {
+    const record = readRecord(error.data);
+    return (
+      error.status === 429 ||
+      record?.errorCode === "GMGN_RATE_LIMIT" ||
+      isGmgnRateLimitText(error.message) ||
+      isGmgnRateLimitText(error.data)
+    );
+  }
+
+  return error instanceof Error
+    ? isGmgnRateLimitText(error.message)
+    : isGmgnRateLimitText(error);
+}
+
+function gmgnRateLimitMessage() {
+  return "GMGN rate limit reached. Please wait a few minutes before starting another scan.";
+}
+
+function gmgnRateLimitTip() {
+  return "Tip: Do not run Fast, Balanced, and Deep at the same time. Run one scan at a time.";
+}
+
+function parseRateLimitCooldownMs(error: unknown) {
+  const source =
+    error instanceof NovaAnalysisRequestError
+      ? `${error.message} ${JSON.stringify(error.data ?? {})}`
+      : error instanceof Error
+      ? error.message
+      : String(error ?? "");
+  const minuteMatch = source.match(/(\d+)\s*(?:minute|min|m)\b/i);
+  if (minuteMatch) return Math.min(Number(minuteMatch[1]) * 60_000, 10 * 60_000);
+  const secondMatch = source.match(/(\d+)\s*(?:second|sec|s)\b/i);
+  if (secondMatch) return Math.min(Number(secondMatch[1]) * 1000, 10 * 60_000);
+  return 3 * 60_000;
+}
+
+function formatCooldown(ms: number) {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 function scoreBand(score: number) {
   if (score >= 70) return "high";
   if (score >= 45) return "mixed";
@@ -930,30 +1276,216 @@ function safeStringArray(value: unknown, fallback: string[] = []) {
     : fallback;
 }
 
-function isExplainableConvictionData(value: unknown): value is ExplainableConvictionData {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<ExplainableConvictionData>;
-
-  return (
-    typeof candidate.finalConvictionScore === "number" &&
-    Boolean(candidate.subScores) &&
-    Boolean(candidate.explanation) &&
-    Boolean(candidate.dataConfidence)
-  );
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
-function normalizeConvictionResult(value: unknown) {
-  if (isExplainableConvictionData(value)) return value;
-  if (
-    value &&
-    typeof value === "object" &&
-    "data" in value &&
-    isExplainableConvictionData((value as { data?: unknown }).data)
-  ) {
-    return (value as { data: ExplainableConvictionData }).data;
+function readFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function novaScore(value: number | null | undefined, fallback = 0) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? clampNumber(value, 0, 100)
+    : fallback;
+}
+
+function novaConfidenceLabel(score: number | null | undefined) {
+  if (typeof score !== "number" || !Number.isFinite(score)) return "Low";
+  if (score >= 75) return "High";
+  if (score >= 55) return "Medium";
+  return "Low";
+}
+
+async function fetchNovaConvictionAnalysis({
+  chain,
+  address,
+  analysisMode,
+  forceRefresh,
+  runId,
+  signal,
+}: {
+  chain: NovaSupportedChain;
+  address: string;
+  analysisMode: NovaAnalysisMode;
+  forceRefresh: boolean;
+  runId: string;
+  signal?: AbortSignal;
+}): Promise<NovaConvictionResult> {
+  const normalizedChain = normalizeChainForNova(chain);
+  const params = new URLSearchParams({
+    chain: normalizedChain,
+    address,
+    analysisMode,
+    forceRefresh: String(forceRefresh),
+    runId,
+  });
+
+  const response = await fetch(
+    `/api/scoring/nova-conviction-v3-test?${params.toString()}`,
+    {
+      method: "GET",
+      cache: "no-store",
+      signal,
+    }
+  );
+  const data = (await response.json()) as NovaConvictionResult & {
+    error?: unknown;
+  };
+
+  if (!response.ok || data.success === false) {
+    throw new NovaAnalysisRequestError(
+      apiErrorMessage(data.error, `Nova Conviction request failed: ${response.status}`),
+      response.status,
+      data
+    );
   }
 
-  return null;
+  return data;
+}
+
+function buildTokenIntelligenceFromNova(
+  nova: NovaConvictionResult
+): TokenIntelligenceData {
+  const holderAlphaSummary = readRecord(nova.moduleSummaries?.holderAlpha);
+  const holderCount =
+    readFiniteNumber(holderAlphaSummary?.holderCount) ??
+    readFiniteNumber(holderAlphaSummary?.analyzedWalletCount) ??
+    readFiniteNumber(holderAlphaSummary?.deepAnalyzedWalletCount) ??
+    0;
+  const warningCount = nova.warnings?.length || 0;
+  const bullishPoints = safeStringArray(nova.thesis?.bullishPoints);
+  const bearishPoints = safeStringArray(nova.thesis?.bearishPoints);
+  const neutralPoints = safeStringArray(nova.thesis?.neutralPoints);
+  const riskNotes = [
+    ...bearishPoints,
+    ...(warningCount
+      ? [`Analysis completed with ${warningCount} backend warning(s).`]
+      : []),
+  ];
+
+  return {
+    analyzedWallets: holderCount,
+    holderSummary: {
+      holderCount,
+      top10Ownership: "N/A",
+      top25Ownership: "N/A",
+      whaleCount: readFiniteNumber(holderAlphaSummary?.whaleLikeHolderCount) ?? 0,
+      contractCount: 0,
+      exchangeCount: 0,
+    },
+    behaviorSummary: {
+      dominantBehaviorClass: nova.convictionTier || "Nova Conviction V3",
+      averageActivityVelocity: novaScore(nova.scores.smartMoneyFlow, 50),
+      averageDormancyRisk: novaScore(nova.risk.riskScore, 50),
+      highestConcentrationRisk:
+        nova.scores.structuralSafety === null
+          ? 50
+          : 100 - novaScore(nova.scores.structuralSafety, 50),
+      reliabilityAverage: novaScore(nova.scores.dataConfidence, 0),
+    },
+    scores: {
+      convictionScore: novaScore(nova.novaConvictionScore, 0),
+      insiderRiskScore: novaScore(nova.risk.riskScore, 0),
+      holderQualityScore: novaScore(nova.scores.holderAlpha, 0),
+      activityScore: novaScore(nova.scores.smartMoneyFlow, 0),
+      reliabilityScore: novaScore(nova.scores.dataConfidence, 0),
+    },
+    thesis: {
+      headline:
+        nova.thesis.summary ||
+        nova.thesis.finalInterpretation ||
+        "Nova Conviction V3 analysis completed.",
+      bullets: [...bullishPoints, ...neutralPoints].slice(0, 5),
+      riskNotes: riskNotes.slice(0, 5),
+      confidenceLabel: novaConfidenceLabel(nova.scores.dataConfidence),
+    },
+    warnings: nova.warnings || [],
+  };
+}
+
+function buildExplainableConvictionFromNova(
+  nova: NovaConvictionResult,
+  tokenData: TokenResult
+): ExplainableConvictionData {
+  const holderAlpha = novaScore(nova.scores.holderAlpha, 50);
+  const smartMoneyFlow = novaScore(nova.scores.smartMoneyFlow, 50);
+  const structuralSafety = novaScore(nova.scores.structuralSafety, 50);
+  const riskPressure = novaScore(nova.scores.riskPressure, 50);
+  const liquidityHealth = novaScore(nova.scores.liquidityHealth, 50);
+  const dataConfidence = novaScore(nova.scores.dataConfidence, 0);
+  const riskScore = novaScore(nova.risk.riskScore, riskPressure);
+  const warningCount = nova.warnings?.length || 0;
+  const positives = safeStringArray(nova.thesis?.bullishPoints);
+  const negatives = safeStringArray(nova.thesis?.bearishPoints);
+  const neutral = safeStringArray(nova.thesis?.neutralPoints);
+
+  return {
+    finalConvictionScore: novaScore(nova.novaConvictionScore, 0),
+    subScores: {
+      holderIntegrity: holderAlpha,
+      walletQuality: holderAlpha,
+      behaviorStability: smartMoneyFlow,
+      liquidityTrust: liquidityHealth,
+      marketMomentum: smartMoneyFlow,
+      riskProtection: 100 - riskPressure,
+      insiderRisk: riskScore,
+      clusterRisk: 100 - structuralSafety,
+      botActivityRisk: riskScore,
+      rotationRisk: riskScore,
+      freshWalletRisk: riskScore,
+    },
+    aggregation: {
+      weightedWalletQuality: holderAlpha,
+      averageBotRisk: riskScore,
+      averageRotationRisk: riskScore,
+      averageConcentrationRisk: 100 - structuralSafety,
+      averageDormancyRisk: riskScore,
+      dataCoverage: dataConfidence,
+    },
+    explanation: {
+      headline:
+        nova.thesis.summary ||
+        nova.thesis.finalInterpretation ||
+        "Nova Conviction V3 analysis completed.",
+      positives,
+      negatives,
+      riskNotes: [
+        ...neutral,
+        ...(warningCount
+          ? [`Analysis completed with ${warningCount} backend warning(s).`]
+          : []),
+      ],
+      methodology:
+        "Nova Conviction V3 combines Holder Alpha V3.2, Smart Money Flow when available, Structural Safety, inverted Risk Pressure, Liquidity Health, and data confidence.",
+    },
+    dataConfidence: {
+      score: dataConfidence,
+      label: novaConfidenceLabel(dataConfidence),
+      warnings: nova.warnings || [],
+    },
+    walletBreakdowns: [],
+    mapperCoverage: {
+      holderCount:
+        readFiniteNumber(readRecord(nova.moduleSummaries?.holderAlpha)?.holderCount) ??
+        0,
+      walletProfileCount: 0,
+      hasMarketData: nova.scores.liquidityHealth !== null,
+      hasClusterData: nova.scores.structuralSafety !== null,
+      hasTokenTransferData: nova.scores.smartMoneyFlow !== null,
+    },
+    mapperWarnings: [],
+    warnings: nova.warnings || [],
+    status: "live",
+    chain: nova.chain,
+    tokenAddress: nova.address,
+    tokenSymbol: tokenData.rawSymbol || tokenData.symbol,
+    cache: {
+      generatedAt: new Date().toISOString(),
+    },
+  };
 }
 
 function buildExplainableIntelligenceReport({
@@ -1079,15 +1611,24 @@ export function TerminalExperience({
 }: {
   initialSection?: TerminalSection;
 }) {
-  const [placeholder, setPlaceholder] = useState("");
+  const placeholder = "Search token...";
   const [activeSection, setActiveSection] =
     useState<TerminalSection>(initialSection);
   const [token, setToken] = useState("$NOVA");
   const [query, setQuery] = useState("");
+  const [analysisMode, setAnalysisMode] =
+    useState<SelectedAnalysisDepthMode>(null);
   const [isScanning, setIsScanning] = useState(false);
-  const [typedThesis, setTypedThesis] = useState("");
   const [results, setResults] = useState<TokenResult[]>([]);
   const [mantleModeEnabled, setMantleModeEnabled] = useState(false);
+  const [hasTokenSelection, setHasTokenSelection] = useState(false);
+  const [terminalRevealed, setTerminalRevealed] = useState(false);
+  const [analysisVisualProgress, setAnalysisVisualProgress] = useState(0);
+  const [activeNovaScan, setActiveNovaScan] =
+    useState<ActiveNovaScan | null>(null);
+  const [scanNotice, setScanNotice] = useState("");
+  const [rateLimitCooldownUntil, setRateLimitCooldownUntil] = useState(0);
+  const [cooldownNow, setCooldownNow] = useState(() => Date.now());
 
   const [walletRows, setWalletRows] = useState<WalletRow[]>([]);
   const [holderLoadState, setHolderLoadState] = useState<HolderLoadState>("idle");
@@ -1123,17 +1664,11 @@ export function TerminalExperience({
   const [walletPersonalityPreviewError, setWalletPersonalityPreviewError] =
     useState("");
 
-const [holderSummary, setHolderSummary] = useState({
-  insiderRisk: 0,
-  holderQuality: 0,
-  conviction: 0,
-  activity: 0,
-});
   const [tokenIntelligence, setTokenIntelligence] =
     useState<TokenIntelligenceData | null>(null);
   const [tokenIntelligenceState, setTokenIntelligenceState] =
     useState<HolderLoadState>("idle");
-  const [tokenIntelligenceError, setTokenIntelligenceError] = useState("");
+  const [, setTokenIntelligenceError] = useState("");
   const [clusterData, setClusterData] = useState<WalletClusterData | null>(null);
   const [clusterLoadState, setClusterLoadState] =
     useState<HolderLoadState>("idle");
@@ -1160,19 +1695,22 @@ const [holderSummary, setHolderSummary] = useState({
   const [unifiedAnalysisState, setUnifiedAnalysisState] =
     useState<HolderLoadState>("idle");
   const [unifiedAnalysisError, setUnifiedAnalysisError] = useState("");
+  const [novaConviction, setNovaConviction] =
+    useState<NovaConvictionResult | null>(null);
+  const [novaConvictionState, setNovaConvictionState] =
+    useState<HolderLoadState>("idle");
+  const [novaConvictionError, setNovaConvictionError] = useState("");
   const [cacheStatus, setCacheStatus] = useState<CacheStatusData | null>(null);
   const [cacheStatusState, setCacheStatusState] =
     useState<HolderLoadState>("idle");
   const [cacheStatusError, setCacheStatusError] = useState("");
-  const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>(() =>
-    readStoredWatchlistItems()
-  );
-  const [watchlistStatus, setWatchlistStatus] = useState("");
   const [formulaValidationSnapshots, setFormulaValidationSnapshots] = useState<
     FormulaValidationSnapshot[]
   >(() => readStoredFormulaValidationSnapshots());
   const [formulaValidationStatus, setFormulaValidationStatus] = useState("");
   const activeAnalysisKeyRef = useRef("");
+  const activeNovaScanRef = useRef<ActiveNovaScan | null>(null);
+  const activeNovaScanControllerRef = useRef<AbortController | null>(null);
 
   const [tokenData, setTokenData] = useState<TokenResult>({
     symbol: "$NOVA",
@@ -1191,13 +1729,6 @@ const [holderSummary, setHolderSummary] = useState({
     shortTokenAddress: "",
     imageUrl: "",
     url: "",
-  });
-
-  const [scores, setScores] = useState({
-    holderQuality: 0,
-    insider: 0,
-    conviction: 0,
-    activity: 0,
   });
 
   const marketCards = useMemo(
@@ -1229,98 +1760,6 @@ const [holderSummary, setHolderSummary] = useState({
       ],
     };
   }, [mantleModeEnabled, tokenData.chain]);
-
-  const overviewConvictionState: HolderLoadState = explainableConviction
-    ? "loaded"
-    : explainableConvictionState === "loading"
-    ? "loading"
-    : explainableConvictionState === "error" && tokenIntelligenceState === "loaded"
-    ? "loaded"
-    : tokenIntelligenceState;
-  const overviewConfidenceLabel =
-    explainableConviction?.dataConfidence.label ||
-    tokenIntelligence?.thesis.confidenceLabel;
-  const explainableReport = useMemo(
-    () =>
-      buildExplainableIntelligenceReport({
-        clusterData,
-        conviction: explainableConviction,
-        tokenIntelligence,
-      }),
-    [clusterData, explainableConviction, tokenIntelligence]
-  );
-
-  useEffect(() => {
-    const fullText = "Search token, wallet or contract";
-    let index = 0;
-
-    const interval = setInterval(() => {
-      setPlaceholder(fullText.slice(0, index));
-      index++;
-      if (index > fullText.length) clearInterval(interval);
-    }, 45);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        WATCHLIST_STORAGE_KEY,
-        JSON.stringify(watchlistItems)
-      );
-    } catch {
-      // Local storage can fail in private or restricted browser contexts.
-    }
-  }, [watchlistItems]);
-
-  useEffect(() => {
-    if (tokenIntelligenceState !== "loaded") {
-      return;
-    }
-
-    const controls = [
-      animate(0, holderSummary.holderQuality, {
-        duration: 1.4,
-        onUpdate: (value) =>
-          setScores((prev) => ({
-            ...prev,
-            holderQuality: Math.round(value),
-          })),
-      }),
-
-      animate(0, holderSummary.insiderRisk, {
-        duration: 1.4,
-        onUpdate: (value) =>
-          setScores((prev) => ({
-            ...prev,
-            insider: Math.round(value),
-          })),
-      }),
-
-      animate(0, holderSummary.conviction, {
-        duration: 1.4,
-        onUpdate: (value) =>
-          setScores((prev) => ({
-            ...prev,
-            conviction: Math.round(value),
-          })),
-      }),
-
-      animate(0, holderSummary.activity, {
-        duration: 1.4,
-        onUpdate: (value) =>
-          setScores((prev) => ({
-            ...prev,
-            activity: Math.round(value),
-          })),
-      }),
-    ];
-
-    return () => {
-      controls.forEach((control) => control.stop());
-    };
-  }, [holderSummary, tokenIntelligenceState]);
 
   const walletReputationResults = useMemo(
     () =>
@@ -1508,33 +1947,273 @@ const [holderSummary, setHolderSummary] = useState({
         : null,
     [convictionFormulaV3Input]
   );
-  const overviewConvictionScore = Math.round(
-    visiblePrimaryConvictionScore(convictionFormulaV3, explainableConviction) ??
-      scores.conviction
+  const analysisStage = useMemo(
+    () =>
+      deriveAnalysisStage({
+        analysisMode: analysisMode ?? "balanced",
+        behaviorPreviewState,
+        clusterLoadState,
+        explainableConvictionState,
+        hasTokenSelection,
+        holderLoadState,
+        tokenData,
+        tokenIntelligenceState,
+        walletPersonalityPreviewState,
+      }),
+    [
+      analysisMode,
+      behaviorPreviewState,
+      clusterLoadState,
+      explainableConvictionState,
+      hasTokenSelection,
+      holderLoadState,
+      tokenData,
+      tokenIntelligenceState,
+      walletPersonalityPreviewState,
+    ]
   );
-  const thesisSourceText = explainableReport.thesisHeadline
-    ? explainableReport.thesisHeadline
-    : tokenIntelligenceState === "loading"
-    ? "Loading token intelligence from holder distribution and wallet metadata."
-    : tokenIntelligenceState === "error"
-    ? "Token intelligence summary is unavailable. Holder rankings and wallet behavior previews remain available."
-    : thesisText;
+  const analysisComplete =
+    hasTokenSelection &&
+    novaConvictionState === "loaded" &&
+    tokenIntelligenceState === "loaded" &&
+    explainableConvictionState === "loaded";
+  const cooldownRemainingMs = Math.max(0, rateLimitCooldownUntil - cooldownNow);
+  const cooldownLabel = cooldownRemainingMs
+    ? `Cooling down GMGN requests: ${formatCooldown(cooldownRemainingMs)}`
+    : "";
+  const activeScanMessage = activeNovaScan
+    ? "Analysis already running. Please wait for this scan to finish."
+    : "";
+  const scanDisabledReason = activeScanMessage || cooldownLabel;
 
   useEffect(() => {
-    const resetFrame = requestAnimationFrame(() => setTypedThesis(""));
-    let index = 0;
+    if (!analysisComplete || terminalRevealed) return;
 
-    const interval = setInterval(() => {
-      setTypedThesis(thesisSourceText.slice(0, index));
-      index++;
-      if (index > thesisSourceText.length) clearInterval(interval);
-    }, 12);
+    const revealTimer = window.setTimeout(() => {
+      setTerminalRevealed(true);
+    }, 700);
+
+    return () => clearTimeout(revealTimer);
+  }, [analysisComplete, terminalRevealed]);
+
+  useEffect(() => {
+    if (!rateLimitCooldownUntil) return;
+
+    const remainingMs = rateLimitCooldownUntil - Date.now();
+    let frame = 0;
+    let clearTimer = 0;
+
+    if (remainingMs <= 0) {
+      frame = window.requestAnimationFrame(() => {
+        setRateLimitCooldownUntil(0);
+        setCooldownNow(Date.now());
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }
+
+    const interval = window.setInterval(() => {
+      setCooldownNow(Date.now());
+    }, 1000);
+    clearTimer = window.setTimeout(() => {
+      setRateLimitCooldownUntil(0);
+      setCooldownNow(Date.now());
+    }, remainingMs);
+    frame = window.requestAnimationFrame(() => setCooldownNow(Date.now()));
 
     return () => {
-      cancelAnimationFrame(resetFrame);
-      clearInterval(interval);
+      window.cancelAnimationFrame(frame);
+      window.clearInterval(interval);
+      window.clearTimeout(clearTimer);
     };
-  }, [thesisSourceText]);
+  }, [rateLimitCooldownUntil]);
+
+  useEffect(() => {
+    let frame = 0;
+    let interval = 0;
+
+    if (!hasTokenSelection) {
+      frame = window.requestAnimationFrame(() => setAnalysisVisualProgress(0));
+      return () => window.cancelAnimationFrame(frame);
+    }
+
+    if (novaConvictionState === "loading") {
+      const startedAt = activeNovaScan?.startedAt ?? Date.now();
+      const progressDurationMs = novaModeProgressDurationMs(
+        activeNovaScan?.analysisMode ?? analysisMode ?? "balanced"
+      );
+      const updateProgress = () => {
+        const elapsed = Date.now() - startedAt;
+        const target = 8 + (elapsed / progressDurationMs) * 86;
+        const cappedTarget = Math.max(8, Math.min(94, target));
+        setAnalysisVisualProgress((value) => {
+          if (value >= 100) return value;
+          return Math.max(value, cappedTarget);
+        });
+      };
+      frame = window.requestAnimationFrame(updateProgress);
+      interval = window.setInterval(updateProgress, 1000);
+
+      return () => {
+        window.cancelAnimationFrame(frame);
+        window.clearInterval(interval);
+      };
+    }
+
+    if (novaConvictionState === "loaded") {
+      frame = window.requestAnimationFrame(() => setAnalysisVisualProgress(100));
+      return () => window.cancelAnimationFrame(frame);
+    }
+
+    if (novaConvictionState === "error") {
+      frame = window.requestAnimationFrame(() =>
+        setAnalysisVisualProgress((value) => Math.max(8, Math.min(value, 88)))
+      );
+      return () => window.cancelAnimationFrame(frame);
+    }
+  }, [activeNovaScan, analysisMode, hasTokenSelection, novaConvictionState]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    let hydrateFrame = 0;
+    const lastToken = window.sessionStorage.getItem(LAST_TOKEN_STORAGE_KEY);
+    const lastMode = window.sessionStorage.getItem(LAST_ANALYSIS_MODE_STORAGE_KEY);
+    const lastResponse = window.sessionStorage.getItem(LAST_NOVA_RESPONSE_STORAGE_KEY);
+    const lastTimestamp = window.sessionStorage.getItem(
+      LAST_ANALYSIS_TIMESTAMP_STORAGE_KEY
+    );
+    if (!lastToken || !lastResponse || !lastTimestamp) return;
+
+    try {
+      const token = JSON.parse(lastToken) as TokenResult;
+      const storedPayload = JSON.parse(lastResponse) as
+        | StoredNovaAnalysisPayload
+        | NovaConvictionResult;
+      const payload =
+        "response" in storedPayload
+          ? storedPayload
+          : ({
+              tokenAddress: token.tokenAddress || "",
+              chain: normalizeChainForNova(token.chain),
+              analysisMode: (lastMode || "balanced") as AnalysisDepthMode,
+              runId: "",
+              timestamp: Number(lastTimestamp),
+              response: storedPayload,
+            } satisfies StoredNovaAnalysisPayload);
+      const snapshot: CompletedNovaAnalysisSnapshot = {
+        token,
+        analysisMode: payload.analysisMode,
+        novaConviction: payload.response,
+        timestamp: String(payload.timestamp),
+      };
+      if (!snapshot?.token?.tokenAddress || !snapshot.novaConviction) return;
+      const hydrationValidationError = holderAlphaDepthError(
+        snapshot.novaConviction,
+        snapshot.analysisMode
+      );
+      if (hydrationValidationError) {
+        logHolderDepthValidationFailure({
+          data: snapshot.novaConviction,
+          extractedDepth: extractHolderAlphaDepth(snapshot.novaConviction),
+          requestedMode: snapshot.analysisMode,
+        });
+        clearStoredNovaAnalysis();
+        return;
+      }
+      const timestampMs = Number(snapshot.timestamp);
+      const normalizedSnapshotChain = normalizeChainForNova(snapshot.token.chain);
+      if (
+        !Number.isFinite(timestampMs) ||
+        Date.now() - timestampMs > STORED_NOVA_ANALYSIS_FRESH_MS ||
+        payload.tokenAddress.toLowerCase() !==
+          snapshot.token.tokenAddress.toLowerCase() ||
+        payload.chain !== normalizedSnapshotChain ||
+        payload.analysisMode !== snapshot.analysisMode
+      ) {
+        return;
+      }
+
+      const restoredToken = normalizeTokenResultForNova({
+        ...snapshot.token,
+        pairAddress: snapshot.token.pairAddress || "",
+        tokenAddress: snapshot.token.tokenAddress || "",
+        shortTokenAddress: snapshot.token.shortTokenAddress || "",
+        imageUrl: snapshot.token.imageUrl || "",
+        url: snapshot.token.url || "",
+      });
+      const restoredTokenAddress = restoredToken.tokenAddress || "";
+      if (restoredToken.chain !== payload.chain) return;
+      const tokenIntelligenceData = buildTokenIntelligenceFromNova(
+        snapshot.novaConviction
+      );
+      const convictionData = buildExplainableConvictionFromNova(
+        snapshot.novaConviction,
+        restoredToken
+      );
+      const unifiedData: UnifiedTokenAnalysisData = {
+        generatedAt: new Date(timestampMs).toISOString(),
+        tokenIntelligence: tokenIntelligenceData,
+        conviction: convictionData,
+        modules: {
+          holders: { status: "skipped" },
+          walletProfiles: { status: "skipped" },
+          clusters: { status: "skipped" },
+          tokenIntelligence: { status: "loaded" },
+          conviction: { status: "loaded" },
+          walletPersonalities: { status: "skipped" },
+        },
+        warnings: snapshot.novaConviction.warnings || [],
+      };
+
+      hydrateFrame = window.requestAnimationFrame(() => {
+        activeAnalysisKeyRef.current = tokenAnalysisKey(
+          restoredToken.chain,
+          restoredTokenAddress
+        );
+        setAnalysisMode(snapshot.analysisMode || "balanced");
+        setHasTokenSelection(true);
+        setTerminalRevealed(true);
+        setActiveSection("Overview");
+        setToken(restoredToken.symbol);
+        setTokenData(restoredToken);
+        setResults([]);
+        setQuery("");
+        setNovaConviction(snapshot.novaConviction);
+        setNovaConvictionState("loaded");
+        setNovaConvictionError("");
+        setUnifiedAnalysis(unifiedData);
+        setUnifiedAnalysisState("loaded");
+        setUnifiedAnalysisError("");
+        setTokenIntelligence(tokenIntelligenceData);
+        setTokenIntelligenceState("loaded");
+        setTokenIntelligenceError("");
+        setExplainableConviction(convictionData);
+        setExplainableConvictionState("loaded");
+        setExplainableConvictionError("");
+        setWalletRows([]);
+        setHolderLoadState("loaded");
+        setHolderError("");
+        setBehaviorPreview(null);
+        setBehaviorPreviewState("loaded");
+        setBehaviorPreviewError("");
+        setClusterData(null);
+        setClusterLoadState("loaded");
+        setClusterError("");
+        setWalletPersonalityPreviews([]);
+        setWalletPersonalityPreviewState("loaded");
+        setWalletPersonalityPreviewError("");
+        setConvictionSnapshots(
+          getMergedConvictionSnapshots(restoredToken.chain, restoredTokenAddress)
+        );
+      });
+    } catch {
+      clearStoredNovaAnalysis();
+    }
+
+    return () => {
+      if (hydrateFrame) window.cancelAnimationFrame(hydrateFrame);
+    };
+  }, []);
 
   useEffect(() => {
     if (!query.trim()) {
@@ -1842,21 +2521,105 @@ const [holderSummary, setHolderSummary] = useState({
     return activeAnalysisKeyRef.current === requestKey;
   }
 
+  function applyCompletedNovaAnalysis(
+    data: NovaConvictionResult,
+    result: TokenResult
+  ) {
+    const tokenIntelligenceData = buildTokenIntelligenceFromNova(data);
+    const convictionData = buildExplainableConvictionFromNova(data, result);
+    const unifiedData: UnifiedTokenAnalysisData = {
+      generatedAt: new Date().toISOString(),
+      tokenIntelligence: tokenIntelligenceData,
+      conviction: convictionData,
+      modules: {
+        holders: { status: "skipped" },
+        walletProfiles: { status: "skipped" },
+        clusters: { status: "skipped" },
+        tokenIntelligence: { status: "loaded" },
+        conviction: { status: "loaded" },
+        walletPersonalities: { status: "skipped" },
+      },
+      warnings: data.warnings || [],
+    };
+
+    setNovaConviction(data);
+    setNovaConvictionState("loaded");
+    setNovaConvictionError("");
+    setUnifiedAnalysis(unifiedData);
+    setUnifiedAnalysisState("loaded");
+    setUnifiedAnalysisError("");
+    setTokenIntelligence(tokenIntelligenceData);
+    setTokenIntelligenceState("loaded");
+    setTokenIntelligenceError("");
+    setExplainableConviction(convictionData);
+    setExplainableConvictionState("loaded");
+    setExplainableConvictionError("");
+    recordConvictionSnapshot(result, convictionData);
+    setWalletRows([]);
+    setHolderLoadState("loaded");
+    setHolderError("");
+    setBehaviorPreview(null);
+    setBehaviorPreviewState("loaded");
+    setBehaviorPreviewError("");
+    setClusterData(null);
+    setClusterLoadState("loaded");
+    setClusterError("");
+    setWalletPersonalityPreviews([]);
+    setWalletPersonalityPreviewState("loaded");
+    setWalletPersonalityPreviewError("");
+  }
+
+  function runNewIntelligenceScan() {
+    if (activeNovaScanRef.current || activeNovaScanControllerRef.current) {
+      setScanNotice("Analysis already running. Please wait for this scan to finish.");
+      return;
+    }
+    activeAnalysisKeyRef.current = "";
+    setHasTokenSelection(false);
+    setTerminalRevealed(false);
+    setActiveSection("Overview");
+    setQuery("");
+    setResults([]);
+    setIsScanning(false);
+    setNovaConvictionError("");
+    setScanNotice("");
+  }
+
   async function selectToken(result: TokenResult) {
-    activeAnalysisKeyRef.current = result.tokenAddress
-      ? tokenAnalysisKey(result.chain, result.tokenAddress)
+    if (activeNovaScanRef.current || activeNovaScanControllerRef.current) {
+      setScanNotice("Analysis already running. Please wait for this scan to finish.");
+      return;
+    }
+    const remainingCooldownMs = Math.max(0, rateLimitCooldownUntil - Date.now());
+    if (remainingCooldownMs > 0) {
+      setCooldownNow(Date.now());
+      setScanNotice(`Cooling down GMGN requests: ${formatCooldown(remainingCooldownMs)}`);
+      return;
+    }
+    if (!analysisMode) {
+      setScanNotice("Choose an intelligence depth first.");
+      return;
+    }
+    const normalizedResult = normalizeTokenResultForNova(result);
+
+    activeAnalysisKeyRef.current = normalizedResult.tokenAddress
+      ? tokenAnalysisKey(normalizedResult.chain, normalizedResult.tokenAddress)
       : "";
-    setToken(result.symbol);
+    setHasTokenSelection(true);
+    setTerminalRevealed(false);
+    setActiveSection("Overview");
+    setToken(normalizedResult.symbol);
     setTokenData({
-      ...result,
-      pairAddress: result.pairAddress || "",
-      tokenAddress: result.tokenAddress || "",
-      shortTokenAddress: result.shortTokenAddress || "",
-      imageUrl: result.imageUrl || "",
-      url: result.url || "",
+      ...normalizedResult,
+      pairAddress: normalizedResult.pairAddress || "",
+      tokenAddress: normalizedResult.tokenAddress || "",
+      shortTokenAddress: normalizedResult.shortTokenAddress || "",
+      imageUrl: normalizedResult.imageUrl || "",
+      url: normalizedResult.url || "",
     });
     setResults([]);
     setQuery("");
+    setScanNotice("");
     setWalletRows([]);
     setHolderError("");
     setBehaviorPreview(null);
@@ -1883,23 +2646,30 @@ const [holderSummary, setHolderSummary] = useState({
     setDecisionSnapshotState("idle");
     setExplainableConviction(null);
     setExplainableConvictionError("");
-    setExplainableConvictionState(result.tokenAddress ? "loading" : "idle");
+    setExplainableConvictionState(normalizedResult.tokenAddress ? "loading" : "idle");
     setUnifiedAnalysis(null);
     setUnifiedAnalysisError("");
-    setUnifiedAnalysisState(result.tokenAddress ? "loading" : "idle");
+    setUnifiedAnalysisState(normalizedResult.tokenAddress ? "loading" : "idle");
+    setNovaConviction(null);
+    setNovaConvictionError("");
+    setNovaConvictionState(normalizedResult.tokenAddress ? "loading" : "idle");
     setConvictionSnapshots(
-      result.tokenAddress
-        ? getMergedConvictionSnapshots(result.chain, result.tokenAddress)
+      normalizedResult.tokenAddress
+        ? getMergedConvictionSnapshots(
+            normalizedResult.chain,
+            normalizedResult.tokenAddress
+          )
         : []
     );
-    setScores({ holderQuality: 0, insider: 0, conviction: 0, activity: 0 });
-    setHolderLoadState(result.tokenAddress ? "loading" : "idle");
-    setBehaviorPreviewState(result.tokenAddress ? "loading" : "idle");
-    setTokenIntelligenceState(result.tokenAddress ? "loading" : "idle");
-    setClusterLoadState(result.tokenAddress ? "loading" : "idle");
-    setWalletPersonalityPreviewState(result.tokenAddress ? "loading" : "idle");
+    setHolderLoadState(normalizedResult.tokenAddress ? "loading" : "idle");
+    setBehaviorPreviewState(normalizedResult.tokenAddress ? "loading" : "idle");
+    setTokenIntelligenceState(normalizedResult.tokenAddress ? "loading" : "idle");
+    setClusterLoadState(normalizedResult.tokenAddress ? "loading" : "idle");
+    setWalletPersonalityPreviewState(
+      normalizedResult.tokenAddress ? "loading" : "idle"
+    );
 
-    if (!result.tokenAddress) {
+    if (!normalizedResult.tokenAddress) {
       setHolderLoadState("error");
       setBehaviorPreviewState("error");
       setTokenIntelligenceState("error");
@@ -1907,12 +2677,7 @@ const [holderSummary, setHolderSummary] = useState({
       setWalletPersonalityPreviewState("error");
       setExplainableConvictionState("error");
       setUnifiedAnalysisState("error");
-      setHolderSummary({
-        insiderRisk: 0,
-        holderQuality: 0,
-        conviction: 0,
-        activity: 0,
-      });
+      setNovaConvictionState("error");
       setHolderError("Selected pair does not include a token contract address.");
       setBehaviorPreviewError("Selected pair does not include a token contract address.");
       setTokenIntelligenceError("Selected pair does not include a token contract address.");
@@ -1920,98 +2685,11 @@ const [holderSummary, setHolderSummary] = useState({
       setWalletPersonalityPreviewError("Selected pair does not include a token contract address.");
       setExplainableConvictionError("Selected pair does not include a token contract address.");
       setUnifiedAnalysisError("Selected pair does not include a token contract address.");
+      setNovaConvictionError("Selected pair does not include a token contract address.");
       return;
     }
 
-    void loadUnifiedTokenAnalysis(result);
-  }
-
-  function createWatchlistSnapshot(): WatchlistItem | null {
-    if (!tokenData.tokenAddress) return null;
-
-    const existing = watchlistItems.find((item) =>
-      sameWatchlistToken(item, tokenData)
-    );
-    const signalBoard = explainableConviction
-      ? buildSignalBoardModel({
-          behaviorPreview,
-          behaviorPreviewError,
-          conviction: explainableConviction,
-          convictionError: explainableConvictionError,
-          holderError,
-          holderLoadState,
-          tokenFlowSummaryV2,
-          tokenIntelligence,
-          unifiedAnalysis,
-          walletRows,
-        })
-      : null;
-    const now = new Date().toISOString();
-    const primaryConvictionScore = visiblePrimaryConvictionScore(
-      convictionFormulaV3,
-      explainableConviction
-    );
-
-    return {
-      id:
-        existing?.id ||
-        `${tokenData.chain}:${tokenData.tokenAddress}`.toLowerCase(),
-      tokenSymbol: tokenData.symbol,
-      tokenName: tokenData.name,
-      tokenLogo: resolveTokenLogo(tokenData),
-      chain: tokenData.chain,
-      dex: tokenData.dex,
-      tokenAddress: tokenData.tokenAddress,
-      pairAddress: tokenData.pairAddress || "",
-      price: tokenData.price,
-      marketCap: tokenData.marketCap,
-      liquidity: tokenData.liquidity,
-      volume24h: tokenData.volume24h,
-      priceChange24h: tokenData.change24h,
-      finalConviction: primaryConvictionScore,
-      finalConvictionV1: explainableConviction?.finalConvictionScore,
-      finalConvictionV3: convictionFormulaV3?.finalConvictionScoreV3,
-      primaryFormula: convictionFormulaV3 ? "V3" : "V1",
-      dataConfidence: explainableConviction?.dataConfidence.label,
-      holderIntegrity: explainableConviction?.subScores.holderIntegrity,
-      walletQuality: explainableConviction?.subScores.walletQuality,
-      riskProtection: explainableConviction?.subScores.riskProtection,
-      insiderRisk: explainableConviction?.subScores.insiderRisk,
-      bundleRisk: explainableConviction?.bundleDetection?.bundleRiskScore,
-      clusterRisk: explainableConviction?.subScores.clusterRisk,
-      latestSignalVerdict: signalBoard?.verdict,
-      addedAt: existing?.addedAt || now,
-      lastUpdatedAt: now,
-    };
-  }
-
-  function addCurrentTokenToWatchlist() {
-    const snapshot = createWatchlistSnapshot();
-    if (!snapshot) {
-      setWatchlistStatus("Analyze a token first");
-      return;
-    }
-
-    const existing = watchlistItems.find((item) => item.id === snapshot.id);
-    const unchanged =
-      existing && JSON.stringify({ ...existing, lastUpdatedAt: snapshot.lastUpdatedAt }) ===
-        JSON.stringify(snapshot);
-
-    setWatchlistItems((items) => {
-      const index = items.findIndex((item) => item.id === snapshot.id);
-      if (index === -1) return [snapshot, ...items];
-      return items.map((item, itemIndex) =>
-        itemIndex === index ? { ...snapshot, addedAt: item.addedAt } : item
-      );
-    });
-    setWatchlistStatus(existing ? (unchanged ? "Already tracked" : "Updated") : "Added");
-    window.setTimeout(() => setWatchlistStatus(""), 1600);
-  }
-
-  function removeWatchlistItem(id: string) {
-    setWatchlistItems((items) => items.filter((item) => item.id !== id));
-    setWatchlistStatus("Removed");
-    window.setTimeout(() => setWatchlistStatus(""), 1600);
+    void loadNovaConvictionAnalysis(normalizedResult);
   }
 
   function saveCurrentFormulaValidationSnapshot() {
@@ -2102,449 +2780,232 @@ const [holderSummary, setHolderSummary] = useState({
     window.setTimeout(() => setFormulaValidationStatus(""), 1600);
   }
 
-  function openWatchlistItem(item: WatchlistItem) {
-    if (!item.tokenAddress || !item.chain) {
-      setWatchlistStatus("Select this token from search to refresh live data.");
+  async function loadNovaConvictionAnalysis(result: TokenResult) {
+    if (!result.tokenAddress) return;
+    if (!analysisMode) {
+      setScanNotice("Choose an intelligence depth first.");
       return;
     }
-
-    setToken(item.tokenSymbol);
-    setTokenData({
-      symbol: item.tokenSymbol,
-      rawSymbol: item.tokenSymbol.replace(/^\$/, ""),
-      name: item.tokenName,
-      chain: item.chain,
-      dex: item.dex,
-      quote: "USD",
-      price: item.price,
-      marketCap: item.marketCap,
-      liquidity: item.liquidity,
-      volume24h: item.volume24h,
-      change24h: item.priceChange24h,
-      pairAddress: item.pairAddress,
-      tokenAddress: item.tokenAddress,
-      shortTokenAddress: shortInsiderWalletAddress(item.tokenAddress),
-      imageUrl: item.tokenLogo,
-      url: "",
-    });
-    setActiveSection("Overview");
-    setWatchlistStatus("Opened local snapshot");
-    window.setTimeout(() => setWatchlistStatus(""), 1600);
-  }
-
-  function applyHolderData(data: UnifiedTokenAnalysisData["holders"]) {
-    setWalletRows(data?.holders || []);
-    setHolderLoadState("loaded");
-
-    if (data?.summary) {
-      setHolderSummary({
-        insiderRisk: data.summary.insiderRisk || 0,
-        holderQuality: data.summary.diamondHands || 0,
-        conviction: data.summary.diamondHands || 0,
-        activity: data.summary.rotation || 0,
-      });
+    if (activeNovaScanRef.current || activeNovaScanControllerRef.current) {
+      setScanNotice("Analysis already running. Please wait for this scan to finish.");
+      return;
     }
-  }
+    const remainingCooldownMs = Math.max(0, rateLimitCooldownUntil - Date.now());
+    if (remainingCooldownMs > 0) {
+      setCooldownNow(Date.now());
+      setScanNotice(`Cooling down GMGN requests: ${formatCooldown(remainingCooldownMs)}`);
+      return;
+    }
+    const normalizedChain = normalizeChainForNova(result.chain);
+    const normalizedResult = normalizeTokenResultForNova(result);
+    const requestKey = tokenAnalysisKey(normalizedChain, result.tokenAddress);
+    const selectedMode: NovaAnalysisMode = analysisMode;
+    const runId = createNovaRunId();
+    const requestStartedAt = Date.now();
+    const controller = new AbortController();
+    const scan: ActiveNovaScan = {
+      runId,
+      chain: normalizedChain,
+      address: result.tokenAddress,
+      symbol: normalizedResult.symbol,
+      analysisMode: selectedMode,
+      startedAt: requestStartedAt,
+      expectedDurationLabel: novaModeExpectedDurationLabel(selectedMode),
+    };
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, novaAnalysisTimeoutMs(selectedMode));
+    activeAnalysisKeyRef.current = requestKey;
+    activeNovaScanRef.current = scan;
+    activeNovaScanControllerRef.current = controller;
+    setActiveNovaScan(scan);
 
-  function applyTokenIntelligenceData(data: TokenIntelligenceData) {
-    setTokenIntelligence(data);
-    setTokenIntelligenceState("loaded");
-    setHolderSummary({
-      insiderRisk: data.scores?.insiderRiskScore || 0,
-      holderQuality: data.scores?.holderQualityScore || 0,
-      conviction: data.scores?.convictionScore || 0,
-      activity: data.scores?.activityScore || 0,
-    });
-  }
-
-  async function loadUnifiedTokenAnalysis(result: TokenResult) {
-    if (!result.tokenAddress) return;
-    const requestKey = tokenAnalysisKey(result.chain, result.tokenAddress);
-
+    clearStoredNovaAnalysis();
+    setScanNotice("");
+    setTokenData((current) => ({
+      ...current,
+      chain: normalizedChain,
+    }));
     setUnifiedAnalysisState("loading");
     setUnifiedAnalysis(null);
     setUnifiedAnalysisError("");
+    setNovaConvictionState("loading");
+    setNovaConviction(null);
+    setNovaConvictionError("");
     setHolderLoadState("loading");
     setBehaviorPreviewState("loading");
     setTokenIntelligenceState("loading");
     setClusterLoadState("loading");
     setExplainableConvictionState("loading");
+    setWalletPersonalityPreviewState("loading");
 
     try {
-      const params = new URLSearchParams({
-        chain: result.chain,
-        tokenAddress: result.tokenAddress,
-        tokenSymbol: result.rawSymbol || result.symbol,
-        mode: "deep",
-        limit: "10",
-        deepLimit: "3",
-        personalityLimit: "5",
-      });
-
-      if (result.marketCap) params.set("marketCapUsd", result.marketCap);
-      if (result.liquidity) params.set("liquidityUsd", result.liquidity);
-      if (result.volume24h) params.set("volume24hUsd", result.volume24h);
-      if (typeof result.change24h === "number") {
-        params.set("priceChange24h", String(result.change24h));
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[NovaOS] Starting Nova V3 scan", {
+          chain: normalizedChain,
+          address: result.tokenAddress,
+          analysisMode: selectedMode,
+          runId,
+        });
       }
 
-      const response = await fetch(`/api/analyze-token?${params}`);
-      const data = (await response.json()) as UnifiedTokenAnalysisData & {
-        error?: unknown;
-      };
+      const data = await fetchNovaConvictionAnalysis({
+        chain: normalizedChain,
+        address: result.tokenAddress,
+        analysisMode: selectedMode,
+        forceRefresh: true,
+        runId,
+        signal: controller.signal,
+      });
       if (!isActiveAnalysis(requestKey)) return;
-
-      if (!response.ok || data.error) {
-        throw new Error(
-          apiErrorMessage(data.error, "Unified token analysis request failed.")
-        );
+      const currentScan = activeNovaScanRef.current;
+      if (
+        !currentScan ||
+        currentScan.runId !== runId ||
+        (data.requestRunId && data.requestRunId !== runId) ||
+        currentScan.chain !== normalizedChain ||
+        currentScan.analysisMode !== selectedMode ||
+        currentScan.address.toLowerCase() !== result.tokenAddress.toLowerCase()
+      ) {
+        throw new Error("Analysis response did not match the active scan.");
+      }
+      const responseError = holderAlphaDepthError(data, selectedMode);
+      if (responseError) {
+        logHolderDepthValidationFailure({
+          data,
+          extractedDepth: extractHolderAlphaDepth(data),
+          requestedMode: selectedMode,
+        });
+        throw new Error(responseError);
       }
 
       if (process.env.NODE_ENV !== "production") {
-        console.debug("NovaOS unified analysis", {
-          modules: data.modules,
-          cache: data.cache,
+        const depth = extractHolderAlphaDepth(data);
+        console.debug("[NovaOS] Nova V3 validated", {
+          mode: selectedMode,
+          deepAnalyzedWalletCount: depth?.deepAnalyzedWalletCount,
+          lightAnalyzedWalletCount: depth?.lightAnalyzedWalletCount,
+          realLightWalletCount: depth?.realLightWalletCount,
+          fallbackLightWalletCount: depth?.fallbackLightWalletCount,
+          runtimeMs: data.runtimeMs,
         });
-      }
-
-      setUnifiedAnalysis(data);
-      setUnifiedAnalysisState("loaded");
-
-      if (data.modules?.holders?.status === "loaded" && data.holders) {
-        applyHolderData(data.holders);
-      } else {
-        void loadHolderIntelligence(result.chain, result.tokenAddress);
-      }
-
-      if (
-        data.modules?.walletProfiles?.status === "loaded" &&
-        data.walletProfiles
-      ) {
-        setBehaviorPreview({
-          profiles: data.walletProfiles.profiles || [],
-          summary: data.walletProfiles.summary,
+        console.debug("[NovaOS] Nova V3 completed", {
+          requestedMode: selectedMode,
+          runtimeMs: data.runtimeMs,
+          runId,
+          backendRunId: data.requestRunId,
+          holderAlpha: data.scores?.holderAlpha,
+          novaConvictionScore: data.novaConvictionScore,
+          deepAnalyzedWalletCount: depth?.deepAnalyzedWalletCount,
+          lightAnalyzedWalletCount: depth?.lightAnalyzedWalletCount,
+          realLightWalletCount: depth?.realLightWalletCount,
+          fallbackLightWalletCount: depth?.fallbackLightWalletCount,
         });
-        setBehaviorPreviewState("loaded");
-      } else {
-        void loadWalletBehaviorPreview(result.chain, result.tokenAddress);
+        console.debug("[NovaOS Scan Completed]", {
+          runId,
+          analysisMode: selectedMode,
+          runtimeMs: data.runtimeMs,
+          holderAlphaDepth: depth,
+          novaConvictionScore: data.novaConvictionScore,
+          riskScore: data.risk?.riskScore,
+          warningCount: data.warnings?.length || 0,
+        });
+        if (selectedMode === "fast" && Date.now() - requestStartedAt < 20_000) {
+          console.warn(
+            "[NovaOS] Very fast Nova V3 response; verify backend did not reuse cache.",
+            data
+          );
+        }
       }
 
-      if (data.modules?.clusters?.status === "loaded" && data.clusters) {
-        setClusterData(data.clusters);
-        setClusterLoadState("loaded");
-      } else {
-        void loadClusterIntelligence(result.chain, result.tokenAddress);
-      }
-
-      if (
-        data.modules?.tokenIntelligence?.status === "loaded" &&
-        data.tokenIntelligence
-      ) {
-        applyTokenIntelligenceData(data.tokenIntelligence);
-      } else {
-        void loadTokenIntelligence(result.chain, result.tokenAddress);
-      }
-
-      const normalizedConviction = normalizeConvictionResult(data.conviction);
-      if (
-        data.modules?.conviction?.status === "loaded" &&
-        normalizedConviction
-      ) {
-        setExplainableConviction(normalizedConviction);
-        setExplainableConvictionState("loaded");
-        recordConvictionSnapshot(result, normalizedConviction);
-      } else {
-        void loadExplainableConviction(result);
-      }
-
-      if (
-        data.modules?.walletPersonalities?.status === "loaded" &&
-        data.walletPersonalities
-      ) {
-        setWalletPersonalityPreviews(
-          data.walletPersonalities.personalities || []
+      applyCompletedNovaAnalysis(data, normalizedResult);
+      if (typeof window !== "undefined") {
+        const timestamp = Date.now();
+        const payload: StoredNovaAnalysisPayload = {
+          tokenAddress: result.tokenAddress,
+          chain: normalizedChain,
+          analysisMode: selectedMode,
+          runId,
+          timestamp,
+          response: data,
+        };
+        const snapshot: CompletedNovaAnalysisSnapshot = {
+          token: normalizedResult,
+          analysisMode: selectedMode,
+          novaConviction: data,
+          timestamp: String(timestamp),
+        };
+        window.sessionStorage.setItem(
+          LAST_TOKEN_STORAGE_KEY,
+          JSON.stringify(normalizedResult)
         );
-        setWalletPersonalityPreviewState("loaded");
-      } else {
-        void loadWalletPersonalityPreviews(result.chain, result.tokenAddress);
+        window.sessionStorage.setItem(
+          LAST_ANALYSIS_MODE_STORAGE_KEY,
+          selectedMode
+        );
+        window.sessionStorage.setItem(
+          LAST_NOVA_RESPONSE_STORAGE_KEY,
+          JSON.stringify(payload)
+        );
+        window.sessionStorage.setItem(
+          LAST_ANALYSIS_TIMESTAMP_STORAGE_KEY,
+          String(timestamp)
+        );
+        window.sessionStorage.setItem(
+          COMPLETED_NOVA_ANALYSIS_STORAGE_KEY,
+          JSON.stringify(snapshot)
+        );
       }
     } catch (error) {
       if (!isActiveAnalysis(requestKey)) return;
+      const isRateLimit = isGmgnRateLimitError(error);
+      const message =
+        timedOut || (error instanceof Error && error.name === "AbortError")
+          ? "Analysis timed out. Try Fast mode or retry in a moment."
+          : isRateLimit
+          ? gmgnRateLimitMessage()
+          : error instanceof Error
+          ? error.message
+          : "Nova Conviction analysis failed. Please try again.";
+      if (isRateLimit) {
+        setRateLimitCooldownUntil(Date.now() + parseRateLimitCooldownMs(error));
+        setCooldownNow(Date.now());
+        setScanNotice(gmgnRateLimitTip());
+      }
+      if (process.env.NODE_ENV !== "production") {
+        console.error("Nova Conviction analysis failed.", error);
+      }
+      setNovaConviction(null);
+      setNovaConvictionState("error");
+      setNovaConvictionError(message);
       setUnifiedAnalysis(null);
       setUnifiedAnalysisState("error");
-      setUnifiedAnalysisError(
-        error instanceof Error
-          ? error.message
-          : "Unified token analysis request failed."
-      );
-
-      void loadHolderIntelligence(result.chain, result.tokenAddress);
-      void loadWalletBehaviorPreview(result.chain, result.tokenAddress);
-      void loadTokenIntelligence(result.chain, result.tokenAddress);
-      void loadClusterIntelligence(result.chain, result.tokenAddress);
-      void loadExplainableConviction(result);
-      void loadWalletPersonalityPreviews(result.chain, result.tokenAddress);
-    }
-  }
-
-  async function loadHolderIntelligence(chain: string, tokenAddress: string) {
-    const requestKey = tokenAnalysisKey(chain, tokenAddress);
-    setHolderLoadState("loading");
-    setHolderError("");
-
-    try {
-      const holdersResponse = await fetch(
-        `/api/holders?chain=${encodeURIComponent(
-          chain
-        )}&tokenAddress=${encodeURIComponent(tokenAddress)}`
-      );
-
-      const holdersData = await holdersResponse.json();
-
-      if (!holdersResponse.ok || holdersData.error) {
-        throw new Error(
-          apiErrorMessage(holdersData.error, "Holder intelligence request failed.")
-        );
-      }
-
-      if (!isActiveAnalysis(requestKey)) return;
-      applyHolderData(holdersData);
-    } catch (error) {
-      if (!isActiveAnalysis(requestKey)) return;
-      setHolderLoadState("error");
-      setWalletRows([]);
-      setHolderSummary({
-        insiderRisk: 0,
-        holderQuality: 0,
-        conviction: 0,
-        activity: 0,
-      });
-      setHolderError(
-        error instanceof Error
-          ? error.message
-          : "Holder intelligence request failed."
-      );
-    }
-  }
-
-  async function loadTokenIntelligence(chain: string, tokenAddress: string) {
-    const requestKey = tokenAnalysisKey(chain, tokenAddress);
-    setTokenIntelligenceState("loading");
-    setTokenIntelligence(null);
-    setTokenIntelligenceError("");
-
-    try {
-      const response = await fetch(
-        `/api/token-intelligence?chain=${encodeURIComponent(
-          chain
-        )}&tokenAddress=${encodeURIComponent(tokenAddress)}&limit=10`
-      );
-      const data = await response.json();
-
-      if (!response.ok || data.error) {
-        throw new Error(
-          apiErrorMessage(data.error, "Token intelligence request failed.")
-        );
-      }
-
-      if (!isActiveAnalysis(requestKey)) return;
-      setTokenIntelligence(data);
-      setTokenIntelligenceState("loaded");
-      setHolderSummary({
-        insiderRisk: data.scores?.insiderRiskScore || 0,
-        holderQuality: data.scores?.holderQualityScore || 0,
-        conviction: data.scores?.convictionScore || 0,
-        activity: data.scores?.activityScore || 0,
-      });
-    } catch (error) {
-      if (!isActiveAnalysis(requestKey)) return;
+      setUnifiedAnalysisError(message);
       setTokenIntelligence(null);
       setTokenIntelligenceState("error");
-      setTokenIntelligenceError(
-        error instanceof Error
-          ? error.message
-          : "Token intelligence request failed."
-      );
-    }
-  }
-
-  async function loadClusterIntelligence(chain: string, tokenAddress: string) {
-    const requestKey = tokenAnalysisKey(chain, tokenAddress);
-    setClusterLoadState("loading");
-    setClusterData(null);
-    setClusterError("");
-
-    try {
-      const response = await fetch(
-        `/api/wallet-clusters?chain=${encodeURIComponent(
-          chain
-        )}&tokenAddress=${encodeURIComponent(tokenAddress)}&limit=20`
-      );
-      const data = await response.json();
-
-      if (!response.ok || data.error) {
-        throw new Error(
-          apiErrorMessage(data.error, "Cluster intelligence request failed.")
-        );
-      }
-
-      if (!isActiveAnalysis(requestKey)) return;
-      setClusterData(data);
-      setClusterLoadState("loaded");
-    } catch (error) {
-      if (!isActiveAnalysis(requestKey)) return;
-      setClusterData(null);
-      setClusterLoadState("error");
-      setClusterError(
-        error instanceof Error
-          ? error.message
-          : "Cluster intelligence request failed."
-      );
-    }
-  }
-
-  async function loadExplainableConviction(result: TokenResult) {
-    if (!result.tokenAddress) return;
-    const requestKey = tokenAnalysisKey(result.chain, result.tokenAddress);
-
-    setExplainableConvictionState("loading");
-    setExplainableConviction(null);
-    setExplainableConvictionError("");
-
-    try {
-      const params = new URLSearchParams({
-        chain: result.chain,
-      tokenAddress: result.tokenAddress,
-      tokenSymbol: result.rawSymbol || result.symbol,
-      limit: "10",
-      deep: "true",
-      deepLimit: "3",
-    });
-
-      if (result.marketCap) params.set("marketCapUsd", result.marketCap);
-      if (result.liquidity) params.set("liquidityUsd", result.liquidity);
-      if (result.volume24h) params.set("volume24hUsd", result.volume24h);
-      if (typeof result.change24h === "number") {
-        params.set("priceChange24h", String(result.change24h));
-      }
-
-      const response = await fetch(`/api/conviction-engine?${params}`);
-      const data = await response.json();
-      if (!isActiveAnalysis(requestKey)) return;
-
-      if (!response.ok || data.error) {
-        throw new Error(
-          apiErrorMessage(data.error, "Explainable Conviction request failed.")
-        );
-      }
-
-      const normalizedConviction = normalizeConvictionResult(data);
-      if (!normalizedConviction) {
-        throw new Error("Explainable Conviction response was incomplete.");
-      }
-
-      setExplainableConviction(normalizedConviction);
-      setExplainableConvictionState("loaded");
-      recordConvictionSnapshot(result, normalizedConviction);
-    } catch (error) {
-      if (!isActiveAnalysis(requestKey)) return;
+      setTokenIntelligenceError(message);
       setExplainableConviction(null);
       setExplainableConvictionState("error");
-      setExplainableConvictionError(
-        error instanceof Error
-          ? error.message
-          : "Explainable Conviction request failed."
-      );
-    }
-  }
-
-  async function loadWalletPersonalityPreviews(
-    chain: string,
-    tokenAddress: string
-  ) {
-    const requestKey = tokenAnalysisKey(chain, tokenAddress);
-    setWalletPersonalityPreviewState("loading");
-    setWalletPersonalityPreviews([]);
-    setWalletPersonalityPreviewError("");
-
-    try {
-      const response = await fetch(
-        `/api/wallet-personalities?chain=${encodeURIComponent(
-          chain
-        )}&tokenAddress=${encodeURIComponent(tokenAddress)}&limit=5`
-      );
-      const data = await response.json();
-
-      if (!response.ok || data.error) {
-        throw new Error(
-          apiErrorMessage(data.error, "Wallet personality preview request failed.")
-        );
-      }
-
-      if (!isActiveAnalysis(requestKey)) return;
-      setWalletPersonalityPreviews(data.personalities || []);
-      setWalletPersonalityPreviewState("loaded");
-    } catch (error) {
-      if (!isActiveAnalysis(requestKey)) return;
-      setWalletPersonalityPreviews([]);
-      setWalletPersonalityPreviewState("error");
-      setWalletPersonalityPreviewError(
-        error instanceof Error
-          ? error.message
-          : "Wallet personality preview request failed."
-      );
-    }
-  }
-
-  async function loadWalletBehaviorPreview(chain: string, tokenAddress: string) {
-    const requestKey = tokenAnalysisKey(chain, tokenAddress);
-    setBehaviorPreviewState("loading");
-    setBehaviorPreview(null);
-    setBehaviorPreviewError("");
-
-    try {
-      const response = await fetch(
-        `/api/wallet-profiles?chain=${encodeURIComponent(
-          chain
-        )}&tokenAddress=${encodeURIComponent(tokenAddress)}&limit=5`
-      );
-
-      const data = await response.json();
-
-      if (!response.ok || data.error) {
-        throw new Error(apiErrorMessage(data.error, "Wallet behavior preview request failed."));
-      }
-
-      if (!isActiveAnalysis(requestKey)) return;
-      setBehaviorPreview({
-        profiles: data.profiles || [],
-        summary: data.summary || {
-          profiledWallets: 0,
-          goodProfiles: 0,
-          partialProfiles: 0,
-          unavailableProfiles: 0,
-          averageActivityScore: 0,
-          averageMaturityScore: 0,
-          highestConcentrationScore: 0,
-          averageDataConfidence: 0,
-          averageWalletAgeDays: null,
-          averageActivityVelocity: 0,
-          averageDormancyRisk: 0,
-          highestConcentrationRisk: 0,
-          reliabilityAverage: 0,
-          dominantBehaviorClass: "unavailable",
-        },
-      });
-      setBehaviorPreviewState("loaded");
-    } catch (error) {
-      if (!isActiveAnalysis(requestKey)) return;
+      setExplainableConvictionError(message);
+      setWalletRows([]);
+      setHolderLoadState("error");
+      setHolderError(message);
       setBehaviorPreview(null);
       setBehaviorPreviewState("error");
-      setBehaviorPreviewError(
-        error instanceof Error
-          ? error.message
-          : "Wallet behavior preview request failed."
-      );
+      setBehaviorPreviewError(message);
+      setClusterData(null);
+      setClusterLoadState("error");
+      setClusterError(message);
+      setWalletPersonalityPreviews([]);
+      setWalletPersonalityPreviewState("error");
+      setWalletPersonalityPreviewError(message);
+    } finally {
+      window.clearTimeout(timeoutId);
+      activeNovaScanRef.current = null;
+      activeNovaScanControllerRef.current = null;
+      setActiveNovaScan(null);
     }
   }
 
@@ -2566,6 +3027,7 @@ const [holderSummary, setHolderSummary] = useState({
       setWalletPersonalityError("Wallet address is unavailable for this holder row.");
     }
   }
+  void openWalletDrawer;
 
   async function createDecisionSnapshot() {
     if (!tokenData.tokenAddress || !tokenIntelligence) return;
@@ -2612,29 +3074,61 @@ const [holderSummary, setHolderSummary] = useState({
   }
 
   return (
-    <main className="relative h-screen overflow-hidden bg-[#020407] text-white">
-      <AnimatedBackground />
-
-      <motion.div
-        initial={{ opacity: 0, y: 18, scale: 0.985, filter: "blur(18px)" }}
-        animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-        transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
-        className="relative z-10 flex h-screen"
-      >
-        <Sidebar
-          activeSection={activeSection}
-          onSelectSection={setActiveSection}
+    <main className="relative h-screen overflow-hidden bg-[var(--nova-bg)] text-[color:var(--nova-text)]">
+      {!hasTokenSelection && (
+        <TerminalIdleState
+          disabledReason={scanDisabledReason}
+          isScanning={isScanning}
+          isScanLocked={Boolean(activeNovaScan)}
+          notice={scanNotice}
+          analysisMode={analysisMode}
+          onAnalysisModeChange={(mode) => {
+            setAnalysisMode(mode);
+            if (scanNotice === "Choose an intelligence depth first.") {
+              setScanNotice("");
+            }
+          }}
+          onSearchFocusChange={() => undefined}
+          placeholder={placeholder}
+          query={query}
+          results={results}
+          selectToken={selectToken}
+          setQuery={setQuery}
         />
+      )}
 
-        <section className="h-screen flex-1 overflow-y-auto overflow-x-hidden p-4 pb-8 lg:p-5 lg:pb-8">
+      {hasTokenSelection && !terminalRevealed && (
+        <IntelligenceAnalysisMode
+          activeScan={activeNovaScan}
+          analysisMode={analysisMode}
+          cooldownLabel={cooldownLabel}
+          error={novaConvictionState === "error" ? novaConvictionError : ""}
+          notice={scanNotice}
+          onBackToSearch={runNewIntelligenceScan}
+          onRetry={() => void loadNovaConvictionAnalysis(tokenData)}
+          progress={analysisVisualProgress}
+          status={
+            novaConvictionState === "loaded"
+              ? "Preparing terminal..."
+              : analysisStage.label
+          }
+          tokenData={tokenData}
+        />
+      )}
+
+      {hasTokenSelection && terminalRevealed && (
+      <div className="relative z-[3] flex h-screen bg-[var(--nova-bg)]">
+        <div className="hidden lg:block">
+          <Sidebar
+            activeSection={activeSection}
+            onSelectSection={setActiveSection}
+          />
+        </div>
+
+        <section className="relative h-screen flex-1 overflow-y-auto overflow-x-hidden p-4 pb-8 lg:p-5 lg:pb-8">
           <Header
             activeSection={activeSection}
-            query={query}
-            setQuery={setQuery}
-            placeholder={placeholder}
-            isScanning={isScanning}
-            results={results}
-            selectToken={selectToken}
+            onNewScan={runNewIntelligenceScan}
           />
 
           <SectionTabs
@@ -2645,20 +3139,20 @@ const [holderSummary, setHolderSummary] = useState({
           {activeSection === "Overview" && (
             <>
               <section className="space-y-4">
-                <TokenHeader
-                  mantleContext={mantleContext}
-                  token={token}
-                  tokenData={tokenData}
-                  marketCards={marketCards}
-                  onAddToWatchlist={addCurrentTokenToWatchlist}
-                  onToggleMantleMode={() =>
-                    setMantleModeEnabled((enabled) => !enabled)
-                  }
-                  watchlistStatus={watchlistStatus}
-                />
+                <div>
+                  <TokenHeader
+                    mantleContext={mantleContext}
+                    token={token}
+                    tokenData={tokenData}
+                    marketCards={marketCards}
+                    onToggleMantleMode={() =>
+                      setMantleModeEnabled((enabled) => !enabled)
+                    }
+                  />
+                </div>
 
-                <div className="grid items-stretch gap-4 xl:grid-cols-[1.12fr_0.88fr]">
-                  <div className="min-h-0">
+                <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,65fr)_minmax(360px,35fr)]">
+                  <div className="min-w-0">
                     <NovaChart
                       token={token}
                       price={tokenData.price}
@@ -2667,39 +3161,40 @@ const [holderSummary, setHolderSummary] = useState({
                       volume24h={tokenData.volume24h}
                       chain={tokenData.chain}
                       pairAddress={tokenData.pairAddress}
-                      chartHeight={420}
+                      chartHeight={560}
                     />
                   </div>
 
-                  <div className="grid min-h-[420px]">
-                    <div className="grid min-h-0 items-center gap-3 lg:grid-cols-[0.86fr_1.14fr] xl:grid-cols-1 2xl:grid-cols-[0.84fr_1.16fr]">
-                      <ConvictionRing
-                        compact
-                        confidenceLabel={overviewConfidenceLabel}
-                        score={overviewConvictionScore}
-                        state={overviewConvictionState}
-                      />
-                      <OverviewScoreStrip
-                        conviction={explainableConviction}
-                        formulaV3={convictionFormulaV3}
-                        insiderRiskV2={insiderRiskV2}
-                        state={explainableConvictionState}
-                        tokenFlowSummaryV2={tokenFlowSummaryV2}
-                      />
-                    </div>
+                  <div className="min-w-0">
+                    <OverviewExecutiveSummary
+                      conviction={explainableConviction}
+                      formulaV3={convictionFormulaV3}
+                      insiderRiskV2={insiderRiskV2}
+                      novaConviction={novaConviction}
+                      state={explainableConvictionState}
+                      tokenFlowSummaryV2={tokenFlowSummaryV2}
+                    />
                   </div>
                 </div>
+
+                <OverviewTop10HolderIntelligence
+                  novaConviction={novaConviction}
+                  state={novaConvictionState}
+                />
               </section>
 
-              <div className="mt-6">
-                <AIThesis
-                  data={tokenIntelligence}
-                  error={tokenIntelligenceError}
-                  loadState={tokenIntelligenceState}
-                  report={explainableReport}
-                  typedThesis={typedThesis}
-                />
-              </div>
+              {novaConvictionState === "loaded" &&
+                (novaConviction?.warnings?.length || 0) > 0 && (
+                  <p className="mt-3 text-xs text-[color:var(--nova-warning)]">
+                    Analysis completed with {novaConviction?.warnings?.length} backend warning(s).
+                  </p>
+                )}
+
+              {novaConvictionState === "error" && novaConvictionError && (
+                <p className="mt-3 text-xs text-[color:var(--nova-danger)]">
+                  {novaConvictionError}
+                </p>
+              )}
 
               {mantleContext.mantleModeActive && (
                 <MantleEcosystemContextPanel mantleContext={mantleContext} />
@@ -2712,32 +3207,21 @@ const [holderSummary, setHolderSummary] = useState({
                 loadState={decisionSnapshotState}
                 onCreateSnapshot={createDecisionSnapshot}
               />
-
-              <OverviewTopHoldersTable
-                behaviorProfiles={behaviorPreview?.profiles || []}
-                loadState={holderLoadState}
-                onSelectWallet={openWalletDrawer}
-                onViewFull={() => setActiveSection("Insider Scan")}
-                personalityError={walletPersonalityPreviewError}
-                personalityLoadState={walletPersonalityPreviewState}
-                personalityPreviews={walletPersonalityPreviews}
-                walletRows={walletRows}
-              />
             </>
           )}
 
           {activeSection === "Conviction Engine" && (
             <section className="space-y-4">
-              <ConvictionHero token={token} tokenData={tokenData} />
               <ExplainableConvictionEnginePanel
                 data={explainableConviction}
                 error={explainableConvictionError}
                 formulaV3={convictionFormulaV3}
-                holderIntelligenceSummary={holderIntelligenceSummary}
                 insiderRiskV2={insiderRiskV2}
                 loadState={explainableConvictionState}
+                novaConviction={novaConviction}
+                token={token}
+                tokenData={tokenData}
                 tokenFlowSummaryV2={tokenFlowSummaryV2}
-                walletReputationSummary={walletReputationSummary}
               />
               {SHOW_INTERNAL_FORMULA_VALIDATION_TOOLS && (
                 <FormulaValidationLogPanel
@@ -2786,11 +3270,9 @@ const [holderSummary, setHolderSummary] = useState({
               convictionLoadState={explainableConvictionState}
               formulaV3={convictionFormulaV3}
               holderError={holderError}
-              holderLoadState={holderLoadState}
               personalities={walletPersonalityPreviews}
               tokenData={tokenData}
               tokenIntelligence={tokenIntelligence}
-              unifiedAnalysis={unifiedAnalysis}
               walletRows={walletRows}
             />
           )}
@@ -2817,87 +3299,54 @@ const [holderSummary, setHolderSummary] = useState({
               conviction={explainableConviction}
               convictionError={explainableConvictionError}
               convictionLoadState={explainableConvictionState}
+              holderIntelligenceMatrix={holderIntelligenceMatrix}
+              holderIntelligenceSummary={holderIntelligenceSummary}
               holderError={holderError}
               holderLoadState={holderLoadState}
-              personalities={walletPersonalityPreviews}
+              novaConviction={novaConviction}
               personalityError={walletPersonalityPreviewError}
               tokenData={tokenData}
               tokenIntelligence={tokenIntelligence}
-              tokenFlowSummaryV2={tokenFlowSummaryV2}
               unifiedAnalysis={unifiedAnalysis}
-              walletFlowV2Results={walletFlowV2Results}
               walletRows={walletRows}
             />
           )}
 
           {activeSection === "Insider Scan" && (
             <InsiderScanDashboard
-              behaviorPreview={behaviorPreview}
-              clusterData={clusterData}
               conviction={explainableConviction}
               convictionError={explainableConvictionError}
               convictionLoadState={explainableConvictionState}
               holderError={holderError}
               holderLoadState={holderLoadState}
-              onSelectWallet={openWalletDrawer}
+              novaConviction={novaConviction}
               token={token}
               tokenData={tokenData}
-              tokenIntelligence={tokenIntelligence}
-              holderIntelligenceMatrix={holderIntelligenceMatrix}
-              insiderRiskV2={insiderRiskV2}
               walletRows={walletRows}
             />
           )}
 
-          {activeSection === "Signals" && (
-            <SignalsMvpSection
-              behaviorPreview={behaviorPreview}
-              behaviorPreviewError={behaviorPreviewError}
-              conviction={explainableConviction}
-              convictionError={explainableConvictionError}
-              convictionLoadState={explainableConvictionState}
-              holderError={holderError}
-              holderLoadState={holderLoadState}
-              tokenData={tokenData}
-              tokenIntelligence={tokenIntelligence}
-              tokenFlowSummaryV2={tokenFlowSummaryV2}
-              unifiedAnalysis={unifiedAnalysis}
-              walletRows={walletRows}
-            />
-          )}
-
-          {activeSection === "Watchlist" && (
-            <WatchlistMvpSection
-              currentTokenData={tokenData}
-              items={watchlistItems}
-              onAddCurrent={addCurrentTokenToWatchlist}
-              onOpenItem={openWatchlistItem}
-              onRemoveItem={removeWatchlistItem}
-              status={watchlistStatus}
-            />
-          )}
-
-          {activeSection === "Social Feed" && (
-            <PlaceholderSection section={activeSection} />
-          )}
         </section>
-      </motion.div>
+      </div>
+      )}
 
-      <WalletDetailDrawer
-        chain={tokenData.chain}
-        loadState={behaviorPreviewState}
-        selected={selectedWallet}
-        transactionData={transactionIntelligence}
-        transactionError={transactionError}
-        transactionLoadState={transactionLoadState}
-        walletMemory={walletMemory}
-        walletMemoryError={walletMemoryError}
-        walletMemoryLoadState={walletMemoryLoadState}
-        walletPersonality={walletPersonality}
-        walletPersonalityError={walletPersonalityError}
-        walletPersonalityLoadState={walletPersonalityLoadState}
-        onClose={() => setSelectedWallet(null)}
-      />
+      {hasTokenSelection && (
+        <WalletDetailDrawer
+          chain={tokenData.chain}
+          loadState={behaviorPreviewState}
+          selected={selectedWallet}
+          transactionData={transactionIntelligence}
+          transactionError={transactionError}
+          transactionLoadState={transactionLoadState}
+          walletMemory={walletMemory}
+          walletMemoryError={walletMemoryError}
+          walletMemoryLoadState={walletMemoryLoadState}
+          walletPersonality={walletPersonality}
+          walletPersonalityError={walletPersonalityError}
+          walletPersonalityLoadState={walletPersonalityLoadState}
+          onClose={() => setSelectedWallet(null)}
+        />
+      )}
     </main>
   );
 }
@@ -2906,41 +3355,425 @@ export default function TerminalPage() {
   return <TerminalExperience />;
 }
 
-function AnimatedBackground() {
+function deriveAnalysisStage({
+  analysisMode,
+  behaviorPreviewState,
+  clusterLoadState,
+  explainableConvictionState,
+  hasTokenSelection,
+  holderLoadState,
+  tokenData,
+  tokenIntelligenceState,
+  walletPersonalityPreviewState,
+}: {
+  analysisMode: AnalysisDepthMode;
+  behaviorPreviewState: HolderLoadState;
+  clusterLoadState: HolderLoadState;
+  explainableConvictionState: HolderLoadState;
+  hasTokenSelection: boolean;
+  holderLoadState: HolderLoadState;
+  tokenData: TokenResult;
+  tokenIntelligenceState: HolderLoadState;
+  walletPersonalityPreviewState: HolderLoadState;
+}): AnalysisStage {
+  if (!hasTokenSelection) {
+    return { label: "Initializing intelligence engine...", progress: 0 };
+  }
+
+  const modeText = novaModeLoadingText(analysisMode);
+  const metadataLoaded = Boolean(tokenData.tokenAddress || tokenData.pairAddress);
+  const holderReady = analysisStateDone(holderLoadState);
+  const relationshipReady =
+    analysisStateDone(behaviorPreviewState) && analysisStateDone(clusterLoadState);
+  const convictionReady = analysisStateDone(explainableConvictionState);
+  const walletIntelligenceReady =
+    relationshipReady && analysisStateDone(walletPersonalityPreviewState);
+  const thesisReady = analysisStateDone(tokenIntelligenceState);
+
+  if (metadataLoaded && holderReady && walletIntelligenceReady && convictionReady && thesisReady) {
+    return { label: "Preparing terminal...", progress: 100 };
+  }
+
+  if (metadataLoaded && holderReady && walletIntelligenceReady && convictionReady) {
+    return { label: "Generating thesis...", progress: 85 };
+  }
+
+  if (metadataLoaded && holderReady && relationshipReady && convictionReady) {
+    return { label: "Building wallet intelligence...", progress: 65 };
+  }
+
+  if (metadataLoaded && holderReady && relationshipReady) {
+    return { label: "Analyzing conviction patterns...", progress: 65 };
+  }
+
+  if (metadataLoaded && holderReady) {
+    return { label: "Mapping wallet relationships...", progress: 45 };
+  }
+
+  if (metadataLoaded) {
+    return { label: modeText, progress: 20 };
+  }
+
+  return { label: "Initializing intelligence engine...", progress: 0 };
+}
+
+function novaModeLoadingText(mode: AnalysisDepthMode) {
+  if (mode === "fast") {
+    return "Calibrating intelligence engine...";
+  }
+  if (mode === "deep") {
+    return "Calculating conviction field...";
+  }
+
+  return "Synchronizing intelligence layers...";
+}
+
+function novaAnalysisTimeoutMs(mode: NovaAnalysisMode) {
+  if (mode === "fast") return 8 * 60_000;
+  if (mode === "balanced") return 20 * 60_000;
+  return 50 * 60_000;
+}
+
+function analysisStateDone(state: HolderLoadState) {
+  return state === "loaded";
+}
+
+function TerminalIdleState({
+  analysisMode,
+  disabledReason,
+  isScanning,
+  isScanLocked,
+  notice,
+  onAnalysisModeChange,
+  onSearchFocusChange,
+  placeholder,
+  query,
+  results,
+  selectToken,
+  setQuery,
+}: {
+  analysisMode: SelectedAnalysisDepthMode;
+  disabledReason?: string;
+  isScanning: boolean;
+  isScanLocked: boolean;
+  notice?: string;
+  onAnalysisModeChange: (mode: AnalysisDepthMode) => void;
+  onSearchFocusChange: (focused: boolean) => void;
+  placeholder: string;
+  query: string;
+  results: TokenResult[];
+  selectToken: (result: TokenResult) => void;
+  setQuery: (value: string) => void;
+}) {
+  const titleWords = ["See", "Beyond", "The", "Chart"];
+
   return (
-    <>
-      <div className="fixed inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(1,44,59,0.62),transparent_36%),radial-gradient(circle_at_16%_72%,rgba(46,1,1,0.14),transparent_34%),radial-gradient(circle_at_88%_62%,rgba(25,9,38,0.24),transparent_34%),linear-gradient(to_bottom,#020407,#010203)]" />
-      <div className="fixed inset-0 opacity-[0.045] bg-[linear-gradient(rgba(255,255,255,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[size:90px_90px]" />
-      <div className="fixed inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,rgba(0,0,0,0.42)_58%,rgba(0,0,0,0.88)_100%)]" />
+    <motion.section
+      initial={{ opacity: 0, y: 18, scale: 0.965, filter: "blur(18px)" }}
+      animate={{
+        opacity: 1,
+        y: 0,
+        scale: query ? 1.002 : 1,
+        filter: query ? "blur(0px) saturate(1.08)" : "blur(0px)",
+      }}
+      exit={{ opacity: 0, y: -10, scale: 0.985, filter: "blur(18px)" }}
+      transition={{ duration: 2, ease: [0.16, 1, 0.3, 1] }}
+      className="relative z-[4] flex h-screen items-center justify-center overflow-hidden px-5"
+    >
+      <div className="relative z-10 flex w-full max-w-[1120px] flex-col items-center text-center">
+        <motion.h1
+          aria-label="See Beyond The Chart"
+          className="nova-display mx-auto flex max-w-[1120px] flex-nowrap justify-center gap-x-3 whitespace-nowrap text-4xl leading-[1.01] text-[color:var(--nova-text)] [text-shadow:0_0_34px_rgba(157,190,205,0.12),0_12px_42px_rgba(0,0,0,0.56)] sm:gap-x-4 sm:text-6xl lg:text-[4.6rem] xl:text-[5rem]"
+        >
+          {titleWords.map((word, index) => (
+            <motion.span
+              key={word}
+              initial={{ opacity: 0, y: 18, scale: 0.965, filter: "blur(18px)" }}
+              animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
+              transition={{
+                duration: 2,
+                delay: index * 0.32,
+                ease: [0.16, 1, 0.3, 1],
+              }}
+              className={`inline-block ${word === "Chart" ? "gradient-word" : ""}`}
+            >
+              {word}
+            </motion.span>
+          ))}
+        </motion.h1>
 
-      <motion.div
-        animate={{
-          x: ["-8%", "8%", "-8%"],
-          y: ["-4%", "4%", "-4%"],
-          opacity: [0.2, 0.34, 0.2],
-        }}
-        transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }}
-        className="pointer-events-none fixed left-[20%] top-[12%] h-[32rem] w-[32rem] rounded-full bg-cyan-900/12 blur-[120px]"
-      />
+        <motion.p
+          initial={{ opacity: 0, y: 10, filter: "blur(8px)" }}
+          animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+          transition={{ duration: 1.15, delay: 1.18, ease: [0.16, 1, 0.3, 1] }}
+          className="entry-subtitle-glow relative mt-7 text-[10px] font-light uppercase tracking-[0.42em] sm:text-xs"
+        >
+          AI-NATIVE CONVICTION INTELLIGENCE
+        </motion.p>
 
-      <motion.div
-        animate={{
-          x: ["8%", "-6%", "8%"],
-          y: ["6%", "-4%", "6%"],
-          opacity: [0.12, 0.24, 0.12],
-        }}
-        transition={{ duration: 22, repeat: Infinity, ease: "easeInOut" }}
-        className="pointer-events-none fixed bottom-[8%] right-[10%] h-[34rem] w-[34rem] rounded-full bg-purple-950/18 blur-[130px]"
-      />
-
-      <motion.div
-        animate={{ y: ["-100%", "120%"] }}
-        transition={{ duration: 9, repeat: Infinity, ease: "linear" }}
-        className="pointer-events-none fixed inset-x-0 top-0 h-28 bg-gradient-to-b from-transparent via-cyan-100/[0.035] to-transparent blur-3xl"
-      />
-    </>
+        <motion.div
+          initial={{ opacity: 0, y: 12, filter: "blur(10px)" }}
+          animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+          transition={{ duration: 1.1, delay: 1.68, ease: [0.16, 1, 0.3, 1] }}
+          className="mt-12 w-full"
+        >
+          <TerminalSearchBox
+            analysisMode={analysisMode}
+            disabledReason={disabledReason}
+            isScanning={isScanning}
+            isScanLocked={isScanLocked}
+            notice={notice}
+            onAnalysisModeChange={onAnalysisModeChange}
+            onFocusChange={onSearchFocusChange}
+            placeholder={placeholder}
+            query={query}
+            results={results}
+            selectToken={selectToken}
+            setQuery={setQuery}
+            variant="idle"
+          />
+        </motion.div>
+      </div>
+    </motion.section>
   );
 }
+
+function IntelligenceAnalysisMode({
+  activeScan,
+  analysisMode,
+  cooldownLabel,
+  error,
+  notice,
+  onBackToSearch,
+  onRetry,
+}: {
+  activeScan: ActiveNovaScan | null;
+  analysisMode: SelectedAnalysisDepthMode;
+  cooldownLabel: string;
+  error: string;
+  notice: string;
+  onBackToSearch: () => void;
+  onRetry: () => void;
+  progress: number;
+  status: string;
+  tokenData: TokenResult;
+}) {
+  const displayMode = activeScan?.analysisMode ?? analysisMode ?? "balanced";
+  const estimatedDurationLabel = novaModeExpectedDurationLabel(displayMode)
+    .replace("-", "–")
+    .replace(" minutes", " MIN");
+
+  return (
+    <motion.section
+      initial={{ opacity: 0, scale: 0.988, filter: "blur(18px)" }}
+      animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+      exit={{ opacity: 0, scale: 0.992, filter: "blur(18px)" }}
+      transition={{ duration: 1.5, ease: [0.16, 1, 0.3, 1] }}
+      className="absolute inset-0 z-[4] flex h-screen items-center justify-center overflow-hidden bg-[#000000] px-5"
+    >
+      <style jsx>{`
+        .nova-loading-visual {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: clamp(26.25rem, 42vw, 32.5rem);
+          max-width: 100%;
+          background: transparent;
+          overflow: visible;
+        }
+
+        .nova-loading-gif {
+          display: block;
+          width: 100%;
+          height: auto;
+          object-fit: contain;
+          opacity: 0.9;
+          mix-blend-mode: screen;
+          filter: contrast(1.1) brightness(0.76);
+          mask-image: radial-gradient(ellipse at center, #000 0%, #000 42%, rgba(0,0,0,0.54) 58%, transparent 80%);
+          -webkit-mask-image: radial-gradient(ellipse at center, #000 0%, #000 42%, rgba(0,0,0,0.54) 58%, transparent 80%);
+        }
+
+        .nova-scan-message {
+          position: absolute;
+          inset: 0;
+          opacity: 0;
+          animation: novaScanMessage 25s ease-in-out infinite;
+          white-space: nowrap;
+        }
+
+        .nova-scan-word {
+          display: inline-block;
+          opacity: 0;
+          transform: translateY(8px);
+          filter: blur(7px);
+          animation-duration: 25s;
+          animation-timing-function: ease-in-out;
+          animation-iteration-count: infinite;
+        }
+
+        .nova-scan-word-1 {
+          animation-name: novaScanWordOne;
+        }
+
+        .nova-scan-word-2 {
+          animation-name: novaScanWordTwo;
+        }
+
+        .nova-scan-word-3 {
+          animation-name: novaScanWordThree;
+        }
+
+        @keyframes novaScanMessage {
+          0%, 13% { opacity: 1; }
+          14%, 100% { opacity: 0; }
+        }
+
+        @keyframes novaScanWordOne {
+          0% {
+            opacity: 0;
+            transform: translateY(8px);
+            filter: blur(7px);
+          }
+          1%, 13% {
+            opacity: 1;
+            transform: translateY(0);
+            filter: blur(0px);
+          }
+          14%, 100% {
+            opacity: 0;
+            transform: translateY(-7px);
+            filter: blur(7px);
+          }
+        }
+
+        @keyframes novaScanWordTwo {
+          0%, 1% {
+            opacity: 0;
+            transform: translateY(8px);
+            filter: blur(7px);
+          }
+          2%, 13% {
+            opacity: 1;
+            transform: translateY(0);
+            filter: blur(0px);
+          }
+          14%, 100% {
+            opacity: 0;
+            transform: translateY(-7px);
+            filter: blur(7px);
+          }
+        }
+
+        @keyframes novaScanWordThree {
+          0%, 2% {
+            opacity: 0;
+            transform: translateY(8px);
+            filter: blur(7px);
+          }
+          3%, 13% {
+            opacity: 1;
+            transform: translateY(0);
+            filter: blur(0px);
+          }
+          14%, 100% {
+            opacity: 0;
+            transform: translateY(-7px);
+            filter: blur(7px);
+          }
+        }
+
+        @media (max-width: 640px) {
+          .nova-loading-visual {
+            width: min(88vw, 25rem);
+          }
+        }
+      `}</style>
+
+      <div className="relative z-10 flex min-h-[560px] w-full max-w-3xl flex-col items-center justify-center text-center">
+        <p className="text-[10px] font-light uppercase tracking-[0.56em] text-[color:rgba(178,190,181,0.40)] sm:text-xs">
+          Analyzing
+        </p>
+
+        <div
+          aria-label={`Nova intelligence scan in progress (${displayMode})`}
+          className="mt-10 flex items-center justify-center"
+        >
+          <div className="nova-loading-visual">
+            {/* eslint-disable-next-line @next/next/no-img-element -- The loading reference is an animated GIF that must render directly as an img asset. */}
+            <img
+              src="/nova-loading-network.gif"
+              alt=""
+              aria-hidden="true"
+              className="nova-loading-gif"
+            />
+          </div>
+        </div>
+
+        <div className="relative mt-10 h-7 w-full max-w-xl overflow-hidden">
+          {novaScanMessages.map((message, index) => (
+            <p
+              key={message}
+              className="nova-scan-message text-[10px] font-light uppercase tracking-[0.38em] text-[color:rgba(229,228,226,0.54)] sm:text-xs"
+              style={{ animationDelay: `${index * 5}s` }}
+            >
+              {message.split(" ").map((word, wordIndex) => (
+                <span
+                  key={`${message}-${word}-${wordIndex}`}
+                  className={`nova-scan-word nova-scan-word-${wordIndex + 1}`}
+                  style={{ animationDelay: `${index * 5}s` }}
+                >
+                  {word}
+                  {wordIndex < message.split(" ").length - 1 ? "\u00a0" : ""}
+                </span>
+              ))}
+            </p>
+          ))}
+        </div>
+
+        <p className="mt-4 text-[9px] font-light uppercase tracking-[0.34em] text-[color:rgba(178,190,181,0.32)] sm:text-[10px]">
+          Estimated duration · {estimatedDurationLabel}
+        </p>
+
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, y: 8, filter: "blur(8px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
+            className="mt-8 flex max-w-md flex-col items-center"
+          >
+            <p className="text-sm text-[color:var(--nova-danger)]">
+              Analysis could not be completed.
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-[color:rgba(178,190,181,0.35)]">{error}</p>
+            {(notice || cooldownLabel) && (
+              <p className="mt-2 text-xs text-[color:rgba(178,190,181,0.35)]">{cooldownLabel || notice}</p>
+            )}
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+              <button
+                type="button"
+                onClick={onRetry}
+                disabled={Boolean(cooldownLabel)}
+                className="rounded-md border border-[color:rgba(178,190,181,0.15)] nova-card-inner px-5 py-3 text-[10px] font-medium uppercase tracking-[0.24em] text-[color:rgba(229,228,226,0.65)] transition hover:border-[color:rgba(178,190,181,0.25)] hover:bg-[rgba(83,104,120,0.18)] disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                Retry
+              </button>
+              <button
+                type="button"
+                onClick={onBackToSearch}
+                className="rounded-md border border-[color:rgba(178,190,181,0.10)] bg-transparent px-5 py-3 text-[10px] font-medium uppercase tracking-[0.24em] text-[color:rgba(229,228,226,0.45)] transition hover:border-[color:rgba(178,190,181,0.20)] hover:text-[color:rgba(229,228,226,0.65)]"
+              >
+                Back
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </div>
+    </motion.section>
+  );
+}
+
+/* Page-level cinematic background removed: terminal background is intentionally flat #0A0A0A. */
 
 function Sidebar({
   activeSection,
@@ -2950,16 +3783,20 @@ function Sidebar({
   onSelectSection: (section: TerminalSection) => void;
 }) {
   return (
-    <aside className="hidden h-screen w-64 shrink-0 border-r border-white/10 bg-black/25 p-5 backdrop-blur-2xl lg:block">
+    <aside className="nova-card hidden h-screen w-72 shrink-0 border-r border-[color:var(--nova-border)] p-5 lg:block">
       <div className="mb-7 flex items-center gap-3">
-        <div className="relative h-8 w-8">
-          <div className="absolute inset-0 rounded-full bg-cyan-300/20 blur-md" />
-          <div className="relative h-8 w-8 rounded-full border border-cyan-200/25 bg-gradient-to-br from-cyan-100/55 via-[#192638] to-[#190926]" />
-        </div>
+        <Image
+          src="/novaicon.png"
+          alt="NovaOS"
+          width={36}
+          height={36}
+          unoptimized
+          className="h-9 w-9 object-contain"
+        />
         <span className="font-semibold tracking-[-0.03em]">NovaOS</span>
       </div>
 
-      <nav className="space-y-2 text-sm text-white/50">
+      <nav className="space-y-2 text-sm text-[color:var(--nova-text-soft)]">
         {terminalSections.map((item) => {
           const isActive = item === activeSection;
 
@@ -2968,15 +3805,15 @@ function Sidebar({
             key={item}
             type="button"
             onClick={() => onSelectSection(item)}
-            className={`group flex w-full items-center rounded-2xl px-4 py-3 text-left transition ${
+            className={`group flex w-full items-center rounded-[1.15rem] px-4 py-3 text-left transition duration-300 ${
               isActive
-                ? "border border-cyan-100/10 bg-cyan-100/[0.055] text-cyan-100"
-                : "hover:bg-white/[0.04] hover:text-white"
+                ? "border border-[color:var(--nova-border-strong)] bg-[rgba(178,190,181,0.08)] text-[color:var(--nova-accent-soft)] shadow-[inset_0_1px_0_rgba(229,228,226,0.08),0_0_30px_rgba(178,190,181,0.06)]"
+                : "hover:scale-[1.01] hover:bg-[rgba(83,104,120,0.36)] hover:text-[color:var(--nova-text)]"
             }`}
           >
             <span
               className={`mr-3 h-1.5 w-1.5 rounded-full ${
-                isActive ? "bg-cyan-100" : "bg-white/18"
+                isActive ? "bg-[var(--nova-accent)]" : "bg-[rgba(83,104,120,0.18)]"
               }`}
             />
             {item}
@@ -2984,12 +3821,12 @@ function Sidebar({
         )})}
       </nav>
 
-      <div className="mt-7 rounded-[1.5rem] border border-white/10 bg-white/[0.03] p-4">
-        <p className="text-xs uppercase tracking-[0.25em] text-cyan-100/45">
+      <div className="nova-card-inner mt-7 rounded-[1.6rem] p-4">
+        <p className="text-xs uppercase tracking-[0.25em] text-[color:var(--nova-accent-soft)]">
           System Status
         </p>
-        <p className="mt-3 text-sm text-white/55">Conviction Engine active</p>
-        <p className="mt-1 text-xs text-white/28">
+        <p className="mt-3 text-sm text-[color:var(--nova-text-soft)]">Conviction Engine active</p>
+        <p className="mt-1 text-xs text-[color:var(--nova-text-muted)]">
           Monitoring Ethereum, Base, Mantle and Solana.
         </p>
       </div>
@@ -2999,118 +3836,392 @@ function Sidebar({
 
 function Header({
   activeSection,
-  query,
-  setQuery,
-  placeholder,
-  isScanning,
-  results,
-  selectToken,
+  onNewScan,
 }: {
   activeSection: TerminalSection;
-  query: string;
-  setQuery: (value: string) => void;
-  placeholder: string;
-  isScanning: boolean;
-  results: TokenResult[];
-  selectToken: (result: TokenResult) => void;
+  onNewScan: () => void;
 }) {
   return (
     <header className="mb-4 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
       <div>
-        <p className="text-xs uppercase tracking-[0.35em] text-cyan-100/40">
+        <p className="nova-tech text-xs text-[color:var(--nova-accent-soft)]">
           Intelligence Terminal
         </p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-[-0.06em]">
-          {activeSection}
+        <h1 className="nova-display mt-1 text-3xl">
+          <DisplayTitleText title={activeSection} />
         </h1>
       </div>
 
-      <div className="group relative w-full xl:w-[560px]">
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          className="relative w-full rounded-full border border-white/10 bg-black/35 px-5 py-3 text-sm text-white/80 outline-none backdrop-blur-2xl transition focus:border-cyan-100/20"
-        />
+      <button
+        type="button"
+        onClick={onNewScan}
+        className="nova-card-inner group relative inline-flex w-full items-center justify-center overflow-hidden rounded-full px-5 py-3 text-xs font-medium uppercase tracking-[0.24em] text-[color:var(--nova-accent-soft)] transition duration-300 hover:scale-[1.01] hover:border-[color:var(--nova-border-strong)] hover:text-[color:var(--nova-text)] xl:w-auto"
+      >
+        <span className="absolute inset-y-1 left-0 w-12 -translate-x-full bg-gradient-to-r from-transparent via-[rgba(229,228,226,0.16)] to-transparent blur-sm transition duration-700 group-hover:translate-x-[18rem]" />
+        <span className="relative">New Intelligence Scan</span>
+      </button>
+    </header>
+  );
+}
 
-        {!query && (
-          <div className="pointer-events-none absolute left-5 top-1/2 flex -translate-y-1/2 text-sm text-white/28">
-            {placeholder}
-            <motion.span
-              animate={{ opacity: [0, 1, 0] }}
-              transition={{ duration: 1, repeat: Infinity }}
+function TerminalSearchBox({
+  analysisMode,
+  disabledReason,
+  isScanning,
+  isScanLocked,
+  notice,
+  onAnalysisModeChange,
+  onFocusChange,
+  placeholder,
+  query,
+  results,
+  selectToken,
+  setQuery,
+  variant = "compact",
+}: {
+  analysisMode: SelectedAnalysisDepthMode;
+  disabledReason?: string;
+  isScanning: boolean;
+  isScanLocked: boolean;
+  notice?: string;
+  onAnalysisModeChange: (mode: AnalysisDepthMode) => void;
+  onFocusChange: (focused: boolean) => void;
+  placeholder: string;
+  query: string;
+  results: TokenResult[];
+  selectToken: (result: TokenResult) => void;
+  setQuery: (value: string) => void;
+  variant?: "compact" | "idle";
+}) {
+  const idle = variant === "idle";
+  const [isFocused, setIsFocused] = useState(false);
+  const [depthHintPulse, setDepthHintPulse] = useState(false);
+  const [depthHintPulseKey, setDepthHintPulseKey] = useState(0);
+  const depthHintTimeoutRef = useRef<number | null>(null);
+  const showPlaceholder = !query && !isFocused && placeholder;
+  const selectedModeCopy = analysisMode ? ANALYSIS_MODE_COPY[analysisMode] : null;
+  const inputDisabled = idle && !analysisMode;
+  const modePrompt =
+    inputDisabled
+      ? "Select an intelligence depth to begin."
+      : notice || "";
+  const modes = (["fast", "balanced", "deep"] as const).map((value) => ({
+    value,
+    ...ANALYSIS_MODE_COPY[value],
+  }));
+
+  useEffect(() => {
+    return () => {
+      if (depthHintTimeoutRef.current) {
+        window.clearTimeout(depthHintTimeoutRef.current);
+        depthHintTimeoutRef.current = null;
+      }
+    };
+  }, [analysisMode]);
+
+  function emphasizeDepthHint() {
+    if (!inputDisabled) return;
+    setDepthHintPulse(true);
+    setDepthHintPulseKey((value) => value + 1);
+    if (depthHintTimeoutRef.current) {
+      window.clearTimeout(depthHintTimeoutRef.current);
+    }
+    depthHintTimeoutRef.current = window.setTimeout(() => {
+      setDepthHintPulse(false);
+      depthHintTimeoutRef.current = null;
+    }, 1000);
+  }
+
+  function selectAnalysisMode(mode: AnalysisDepthMode) {
+    setDepthHintPulse(false);
+    if (depthHintTimeoutRef.current) {
+      window.clearTimeout(depthHintTimeoutRef.current);
+      depthHintTimeoutRef.current = null;
+    }
+    onAnalysisModeChange(mode);
+  }
+
+  return (
+    <div className="group relative w-full">
+      <div
+        className="relative"
+        onMouseDown={(event) => {
+          if (!inputDisabled) return;
+          event.preventDefault();
+          emphasizeDepthHint();
+        }}
+      >
+      <input
+        value={query}
+        disabled={inputDisabled}
+        onBlur={() => {
+          setIsFocused(false);
+          onFocusChange(false);
+        }}
+        onFocus={() => {
+          if (inputDisabled) return;
+          setIsFocused(true);
+          onFocusChange(true);
+        }}
+        onChange={(event) => {
+          if (!inputDisabled) setQuery(event.target.value);
+        }}
+        className={`relative z-10 w-full rounded-[2rem] border text-[color:var(--nova-text)] outline-none backdrop-blur-[30px] transition duration-[420ms] placeholder:text-transparent disabled:cursor-text disabled:opacity-100 ${
+          inputDisabled
+            ? "border-[color:var(--nova-border)] nova-card-inner px-8 py-5 text-base shadow-[inset_0_0_34px_rgba(0,0,0,0.34)]"
+            : idle
+            ? "border-[color:var(--nova-border)] nova-card-inner px-8 py-5 text-base shadow-[inset_0_0_34px_rgba(0,0,0,0.34)] hover:border-[color:var(--nova-border-strong)] hover:bg-[rgba(10,10,10,0.68)] focus:border-[color:var(--nova-border-strong)] focus:bg-[rgba(10,10,10,0.72)] focus:shadow-[inset_0_0_32px_rgba(0,0,0,0.28),0_0_28px_rgba(178,190,181,0.06)]"
+            : "border-[color:var(--nova-border)] nova-card-inner px-6 py-3.5 text-sm hover:border-[color:var(--nova-border-strong)] focus:border-[color:var(--nova-border-strong)] focus:bg-[rgba(10,10,10,0.72)]"
+        }`}
+      />
+
+      {showPlaceholder && (
+        <div
+          className={`pointer-events-none absolute left-8 top-1/2 z-20 flex -translate-y-1/2 font-light transition duration-500 group-focus-within:text-[color:var(--nova-text-soft)] ${
+            inputDisabled
+              ? "text-base text-[color:var(--nova-text-muted)]"
+              : idle
+              ? "text-base text-[color:var(--nova-text-muted)]"
+              : "text-sm text-[color:var(--nova-text-muted)]"
+          }`}
+        >
+          {placeholder}
+        </div>
+      )}
+      </div>
+
+      {query && (
+        <div className="nova-card-strong relative z-[60] mt-4 max-h-[520px] w-full overflow-y-auto rounded-[1.7rem] p-2">
+          {isScanning && (
+            <div className="px-4 py-5 text-sm text-[color:var(--nova-text-muted)]">
+              Searching token pairs...
+            </div>
+          )}
+
+          {!isScanning && results.length === 0 && (
+            <div className="px-4 py-5 text-sm text-[color:var(--nova-text-muted)]">
+              No token pairs found.
+            </div>
+          )}
+
+          {results.map((result) => (
+            <button
+              key={`${result.chain}-${result.dex}-${result.pairAddress}`}
+              disabled={isScanLocked || Boolean(disabledReason)}
+              onClick={() => selectToken(result)}
+              className="flex w-full items-center justify-between gap-4 rounded-2xl px-4 py-3 text-left transition duration-300 hover:bg-[rgba(83,104,120,0.34)] hover:text-[color:var(--nova-text)] focus:outline-none focus:ring-1 focus:ring-[rgba(178,190,181,0.16)] disabled:cursor-not-allowed disabled:opacity-45"
             >
-              |
-            </motion.span>
-          </div>
-        )}
-
-        {query && (
-          <div className="absolute right-0 top-14 z-50 max-h-[520px] w-full overflow-y-auto rounded-[1.5rem] border border-white/10 bg-[#05080a]/95 p-2 shadow-[0_30px_100px_rgba(0,0,0,0.65)] backdrop-blur-2xl">
-            {isScanning && (
-              <div className="px-4 py-5 text-sm text-white/35">
-                Searching token pairs...
-              </div>
-            )}
-
-            {!isScanning && results.length === 0 && (
-              <div className="px-4 py-5 text-sm text-white/35">
-                No token pairs found.
-              </div>
-            )}
-
-            {results.map((result) => (
-              <button
-                key={`${result.chain}-${result.dex}-${result.pairAddress}`}
-                onClick={() => selectToken(result)}
-                className="flex w-full items-center justify-between gap-4 rounded-2xl px-4 py-3 text-left transition hover:bg-white/[0.05]"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  {result.imageUrl ? (
-                    <Image
-                      src={result.imageUrl}
-                      alt={result.symbol}
-                      width={36}
-                      height={36}
-                      unoptimized
-                      className="h-9 w-9 rounded-full border border-white/10 object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-9 w-9 items-center justify-center rounded-full border border-cyan-100/15 bg-cyan-100/[0.045] text-xs text-cyan-100/60">
-                      {result.rawSymbol?.slice(0, 2) || "?"}
-                    </div>
-                  )}
-
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-white/82">
-                      {result.symbol}{" "}
-                      <span className="text-white/35">{result.name}</span>
-                    </p>
-                    <p className="mt-1 truncate text-xs text-white/32">
-                      {chainLabel(result.chain)} · {result.dex} ·{" "}
-                      {result.shortTokenAddress || "contract"}
-                    </p>
+              <div className="flex min-w-0 items-center gap-3">
+                {result.imageUrl ? (
+                  <Image
+                    src={result.imageUrl}
+                    alt={result.symbol}
+                    width={36}
+                    height={36}
+                    unoptimized
+                    className="h-9 w-9 rounded-full border border-[color:var(--nova-border)] object-cover"
+                  />
+                ) : (
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full nova-card-inner text-xs text-[color:var(--nova-accent-soft)]">
+                    {result.rawSymbol?.slice(0, 2) || "?"}
                   </div>
-                </div>
+                )}
 
-                <div className="shrink-0 text-right">
-                  <p className="text-sm text-cyan-100/70">{result.price}</p>
-                  <p className="mt-1 text-xs text-white/32">
-                    MC {result.marketCap} · Vol {result.volume24h}
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-[color:var(--nova-text)]">
+                    {result.symbol}{" "}
+                    <span className="text-[color:var(--nova-text-muted)]">{result.name}</span>
                   </p>
-                  {result.searchQuality && result.searchQuality !== "strong" && (
-                    <span className="mt-2 inline-flex rounded-full border border-amber-100/12 bg-amber-100/[0.045] px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] text-amber-100/48">
-                      {result.searchQuality === "low-liquidity"
-                        ? "Low liquidity"
-                        : "Unverified liquidity"}
-                    </span>
-                  )}
+                  <p className="mt-1 truncate text-xs text-[color:var(--nova-text-muted)]">
+                    {chainLabel(result.chain)} / {result.dex} /{" "}
+                    {result.shortTokenAddress || "contract"}
+                  </p>
                 </div>
-              </button>
+              </div>
+
+              <div className="shrink-0 text-right">
+                <p className="text-sm text-[color:var(--nova-accent)]">{result.price}</p>
+                <p className="mt-1 text-xs text-[color:var(--nova-text-muted)]">
+                  MC {result.marketCap} / Vol {result.volume24h}
+                </p>
+                {result.searchQuality && result.searchQuality !== "strong" && (
+                  <span className="mt-2 inline-flex rounded-full nova-card-inner px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] text-[color:var(--nova-warning)]">
+                    {result.searchQuality === "low-liquidity"
+                      ? "Low liquidity"
+                      : "Unverified liquidity"}
+                  </span>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-6 flex flex-wrap justify-center gap-3">
+        {modes.map((mode) => {
+          const isActive = analysisMode === mode.value;
+
+          return (
+            <button
+              key={mode.value}
+              type="button"
+              onClick={() => {
+                if (!isScanLocked) selectAnalysisMode(mode.value);
+              }}
+              disabled={isScanLocked}
+              className={`group/mode relative h-12 min-w-[132px] overflow-hidden rounded-full border px-8 text-center backdrop-blur-[34px] transition duration-300 sm:h-[3.25rem] sm:min-w-[148px] sm:px-10 ${
+                isActive
+                  ? "border-[color:var(--nova-border-strong)] bg-[rgba(178,190,181,0.10)] text-[color:var(--nova-text)] shadow-[0_0_26px_rgba(178,190,181,0.07),inset_0_-18px_34px_rgba(0,0,0,0.3)]"
+                  : "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-soft)] hover:scale-[1.015] hover:border-[color:var(--nova-border-strong)] hover:bg-[rgba(83,104,120,0.34)] hover:text-[color:var(--nova-text)] hover:shadow-[0_0_22px_rgba(178,190,181,0.045)]"
+              } disabled:opacity-50`}
+              title={mode.detail}
+            >
+              <span className="pointer-events-none absolute -right-10 -top-10 h-24 w-24 rounded-full bg-[rgba(178,190,181,0.04)] blur-2xl opacity-0 transition duration-300 group-hover/mode:opacity-100" />
+              <span className="relative flex h-full items-center justify-center text-[11px] font-semibold uppercase tracking-[0.26em]">
+                {mode.label}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-5 min-h-6 text-center">
+        {disabledReason ? (
+          <p className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">
+            {disabledReason}
+          </p>
+        ) : selectedModeCopy ? (
+          <motion.p
+            key={analysisMode}
+            initial="hidden"
+            animate="visible"
+            variants={{
+              hidden: {},
+              visible: {
+                transition: {
+                  staggerChildren: 0.045,
+                },
+              },
+            }}
+            className="text-[11px] font-light uppercase leading-relaxed tracking-[0.2em] text-[color:var(--nova-text-soft)]"
+          >
+            {selectedModeCopy.detail.split(" ").map((word, index) => (
+              <motion.span
+                key={`${analysisMode}-${word}-${index}`}
+                variants={{
+                  hidden: { opacity: 0, y: 7, filter: "blur(6px)" },
+                  visible: { opacity: 1, y: 0, filter: "blur(0px)" },
+                }}
+                transition={{ duration: 0.46, ease: [0.16, 1, 0.3, 1] }}
+                className="inline-block"
+              >
+                {word}
+                {index < selectedModeCopy.detail.split(" ").length - 1 ? "\u00A0" : ""}
+              </motion.span>
             ))}
-          </div>
+          </motion.p>
+        ) : (
+          <motion.p
+            key={`${modePrompt}-${depthHintPulseKey}`}
+            initial={
+              depthHintPulse
+                ? { opacity: 0.38, filter: "blur(2px)", textShadow: "0 0 0 rgba(181, 231, 238, 0)" }
+                : false
+            }
+            animate={
+              depthHintPulse
+                ? {
+                    opacity: [0.5, 0.9, 0.5],
+                    filter: ["blur(1px)", "blur(0px)", "blur(0px)"],
+                    textShadow: [
+                      "0 0 0 rgba(181, 231, 238, 0)",
+                      "0 0 20px rgba(181, 231, 238, 0.22)",
+                      "0 0 0 rgba(181, 231, 238, 0)",
+                    ],
+                  }
+                : { opacity: 1, filter: "blur(0px)" }
+            }
+            transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
+            className={`text-[10px] font-light uppercase tracking-[0.28em] ${
+              depthHintPulse ? "text-[color:var(--nova-text)]" : "text-[color:var(--nova-text-muted)]"
+            }`}
+          >
+            {modePrompt}
+          </motion.p>
         )}
       </div>
-    </header>
+
+      {false && query && (
+        <div
+          className={`absolute right-0 z-50 max-h-[520px] w-full overflow-y-auto rounded-[1.5rem] nova-card-inner p-2 shadow-[0_30px_100px_rgba(0,0,0,0.65)] backdrop-blur-2xl ${
+            idle ? "top-[4.8rem]" : "top-14"
+          }`}
+        >
+          {isScanning && (
+            <div className="px-4 py-5 text-sm text-[color:var(--nova-text-muted)]">
+              Searching token pairs...
+            </div>
+          )}
+
+          {!isScanning && results.length === 0 && (
+            <div className="px-4 py-5 text-sm text-[color:var(--nova-text-muted)]">
+              No token pairs found.
+            </div>
+          )}
+
+          {results.map((result) => (
+            <button
+              key={`${result.chain}-${result.dex}-${result.pairAddress}`}
+              disabled={isScanLocked || Boolean(disabledReason)}
+              onClick={() => selectToken(result)}
+              className="flex w-full items-center justify-between gap-4 rounded-2xl px-4 py-3 text-left transition duration-300 hover:nova-card-inner hover:text-[color:var(--nova-text)] focus:outline-none focus:ring-1 focus:ring-[rgba(178,190,181,0.14)] disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                {result.imageUrl ? (
+                  <Image
+                    src={result.imageUrl}
+                    alt={result.symbol}
+                    width={36}
+                    height={36}
+                    unoptimized
+                    className="h-9 w-9 rounded-full border border-[color:var(--nova-border)] object-cover"
+                  />
+                ) : (
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full nova-card-inner text-xs text-[color:var(--nova-accent-soft)]">
+                    {result.rawSymbol?.slice(0, 2) || "?"}
+                  </div>
+                )}
+
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-[color:var(--nova-text)]">
+                    {result.symbol}{" "}
+                    <span className="text-[color:var(--nova-text-muted)]">{result.name}</span>
+                  </p>
+                  <p className="mt-1 truncate text-xs text-[color:var(--nova-text-muted)]">
+                    {chainLabel(result.chain)} / {result.dex} /{" "}
+                    {result.shortTokenAddress || "contract"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="shrink-0 text-right">
+                <p className="text-sm text-[color:var(--nova-accent)]">{result.price}</p>
+                <p className="mt-1 text-xs text-[color:var(--nova-text-muted)]">
+                  MC {result.marketCap} / Vol {result.volume24h}
+                </p>
+                {result.searchQuality && result.searchQuality !== "strong" && (
+                  <span className="mt-2 inline-flex rounded-full nova-card-inner px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] text-[color:var(--nova-warning)]">
+                    {result.searchQuality === "low-liquidity"
+                      ? "Low liquidity"
+                      : "Unverified liquidity"}
+                  </span>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -3131,10 +4242,10 @@ function SectionTabs({
             key={section}
             type="button"
             onClick={() => onSelectSection(section)}
-            className={`shrink-0 rounded-full border px-4 py-2 text-xs transition ${
+            className={`shrink-0 rounded-full border px-4 py-2 text-xs backdrop-blur-2xl transition duration-300 ${
               isActive
-                ? "border-cyan-100/16 bg-cyan-100/[0.06] text-cyan-100/75"
-                : "border-white/10 bg-white/[0.025] text-white/38"
+                ? "border-[color:rgba(178,190,181,0.14)] bg-[rgba(83,104,120,0.12)] text-[color:var(--nova-accent-soft)] shadow-[0_0_24px_rgba(83,104,120,0.07)]"
+                : "border-[color:rgba(178,190,181,0.08)] nova-card-inner text-[color:var(--nova-text-muted)]"
             }`}
           >
             {section}
@@ -3170,53 +4281,6 @@ function SectionShell({
   );
 }
 
-function ConvictionHero({
-  token,
-  tokenData,
-}: {
-  token: string;
-  tokenData: TokenResult;
-}) {
-  const logoUrl = resolveTokenLogo(tokenData);
-  const [failedLogoUrl, setFailedLogoUrl] = useState("");
-  const showLogo = Boolean(logoUrl && failedLogoUrl !== logoUrl);
-
-  return (
-    <section className="relative min-h-[168px] overflow-hidden rounded-[2rem] border border-white/10 bg-[#06090d]/92 p-5 shadow-[0_24px_90px_rgba(0,0,0,0.28)] backdrop-blur-2xl">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_82%_42%,rgba(180,240,255,0.16),transparent_42%)]" />
-      <div className="pointer-events-none absolute inset-y-0 right-0 w-2/3 bg-gradient-to-l from-cyan-100/[0.055] via-cyan-100/[0.02] to-transparent" />
-      {showLogo && (
-        <div className="pointer-events-none absolute -right-12 top-1/2 h-64 w-64 -translate-y-1/2 opacity-[0.12] blur-3xl">
-          <Image
-            alt=""
-            className="object-cover"
-            fill
-            sizes="256px"
-            src={logoUrl || ""}
-            unoptimized
-            onError={() => setFailedLogoUrl(logoUrl || "")}
-          />
-        </div>
-      )}
-      <div className="relative flex min-h-[128px] items-center justify-between gap-5">
-        <div className="min-w-0">
-          <h1 className="text-4xl font-semibold tracking-[-0.06em] text-white/92 md:text-5xl">
-            Nova Conviction
-          </h1>
-        </div>
-        <div className="relative flex shrink-0 items-center justify-center">
-          <div className="absolute h-28 w-28 rounded-full bg-cyan-100/10 blur-2xl" />
-          <TokenAvatar
-            logoUrl={showLogo ? logoUrl : undefined}
-            sizeClass="h-24 w-24 md:h-28 md:w-28"
-            token={token}
-          />
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function TerminalSectionHeader({
   badge,
   badgeTone = "cyan",
@@ -3234,13 +4298,15 @@ function TerminalSectionHeader({
 }) {
   return (
     <section className={terminalHeaderSurfaceClass}>
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_76%_0%,rgba(15,97,115,0.14),transparent_44%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_76%_0%,rgba(83,104,120,0.12),transparent_44%),linear-gradient(135deg,rgba(178,190,181,0.045),transparent_28%)]" />
       <div className="relative flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
             <div>
               {eyebrow && <p className={terminalEyebrowClass}>{eyebrow}</p>}
-              <h1 className={terminalTitleClass}>{title}</h1>
+              <h1 className={terminalTitleClass}>
+                <DisplayTitleText title={title} />
+              </h1>
             </div>
             {badge && <TerminalBadge tone={badgeTone}>{badge}</TerminalBadge>}
           </div>
@@ -3249,6 +4315,20 @@ function TerminalSectionHeader({
         {children}
       </div>
     </section>
+  );
+}
+
+function DisplayTitleText({ title }: { title: string }) {
+  const words = title.trim().split(/\s+/);
+  const finalWord = words.pop();
+
+  if (!finalWord) return null;
+
+  return (
+    <>
+      {words.length > 0 && <>{words.join(" ")} </>}
+      <span className="gradient-word">{finalWord}</span>
+    </>
   );
 }
 
@@ -3267,12 +4347,12 @@ function TerminalBadge({
 }
 
 function terminalBadgeClass(tone: TerminalBadgeTone) {
-  if (tone === "purple") return "border-purple-100/14 bg-purple-100/[0.045] text-purple-100/64";
-  if (tone === "warning") return "border-amber-100/14 bg-amber-100/[0.045] text-amber-100/64";
-  if (tone === "danger") return "border-red-100/14 bg-red-100/[0.04] text-red-100/64";
-  if (tone === "success") return "border-emerald-100/14 bg-emerald-100/[0.045] text-emerald-100/64";
-  if (tone === "muted") return "border-white/10 bg-white/[0.035] text-white/46";
-  return "border-cyan-100/12 bg-cyan-100/[0.045] text-cyan-100/64";
+  if (tone === "purple") return "border-[color:var(--nova-border)] bg-[rgba(94,114,107,0.09)] text-[color:var(--nova-accent-soft)]";
+  if (tone === "warning") return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-warning)]";
+  if (tone === "danger") return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-danger)]";
+  if (tone === "success") return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-success)]";
+  if (tone === "muted") return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-soft)]";
+  return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-accent)]";
 }
 
 function TerminalStatePanel({
@@ -3292,13 +4372,13 @@ function TerminalStatePanel({
         <motion.div
           animate={{ opacity: [0.35, 1, 0.35] }}
           transition={{ duration: 1.3, repeat: Infinity, ease: "easeInOut" }}
-          className="mx-auto mb-4 h-1.5 w-24 rounded-full bg-cyan-100/35"
+          className="mx-auto mb-4 h-1.5 w-24 rounded-full bg-[rgba(83,104,120,0.28)]"
         />
       )}
-      <p className={`text-sm font-medium ${tone === "error" ? "text-red-100/68" : "text-white/68"}`}>
+      <p className={`text-sm font-medium ${tone === "error" ? "text-[color:var(--nova-text-soft)]" : "text-[color:var(--nova-text-soft)]"}`}>
         {title}
       </p>
-      <p className="mx-auto mt-2 max-w-2xl text-xs leading-relaxed text-white/34">
+      <p className="mx-auto mt-2 max-w-2xl text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
         {detail}
       </p>
     </div>
@@ -3333,7 +4413,7 @@ function TokenAvatar({
 
   return (
     <div
-      className={`relative flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-cyan-100/14 bg-cyan-100/[0.055] shadow-[0_0_28px_rgba(34,211,238,0.13)] ${sizeClass}`}
+      className={`relative flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-[color:var(--nova-border)] bg-[rgba(83,104,120,0.1)] shadow-[0_0_28px_rgba(83,104,120,0.13)] ${sizeClass}`}
     >
       {showLogo ? (
         <Image
@@ -3347,8 +4427,8 @@ function TokenAvatar({
         />
       ) : (
         <>
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(180,240,255,0.28),transparent_45%),linear-gradient(135deg,rgba(34,211,238,0.12),rgba(124,58,237,0.08))]" />
-          <span className="relative text-lg font-semibold text-cyan-50/82">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(127,144,150,0.22),transparent_45%),linear-gradient(135deg,rgba(83,104,120,0.12),rgba(94,114,107,0.1))]" />
+          <span className="relative text-lg font-semibold text-[color:var(--nova-text)]">
             {tokenInitial(token)}
           </span>
         </>
@@ -3359,20 +4439,16 @@ function TokenAvatar({
 
 function TokenHeader({
   mantleContext,
-  onAddToWatchlist,
   onToggleMantleMode,
   token,
   tokenData,
   marketCards,
-  watchlistStatus,
 }: {
   mantleContext: MantleContext;
-  onAddToWatchlist: () => void;
   onToggleMantleMode: () => void;
   token: string;
   tokenData: TokenResult;
   marketCards: { label: string; value: string }[];
-  watchlistStatus: string;
 }) {
   const logoUrl = resolveTokenLogo(tokenData);
   const tokenLinks = getTokenLinks(tokenData);
@@ -3395,20 +4471,20 @@ function TokenHeader({
   ].filter((link) => Boolean(link.href));
 
   return (
-    <div className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 backdrop-blur-2xl">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_0%,rgba(1,44,59,0.38),transparent_55%)]" />
+    <div className="relative overflow-hidden rounded-[2rem] nova-card-inner p-4 backdrop-blur-2xl">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_0%,rgba(94,114,107,0.14),transparent_55%)]" />
 
       <div className="relative flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div className="flex min-w-0 items-center gap-3">
           <TokenAvatar logoUrl={logoUrl} token={token} />
           <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.24em] text-white/34">
+            <p className="text-xs uppercase tracking-[0.24em] text-[color:var(--nova-text-muted)]">
               Analyzing
             </p>
             <h2 className="mt-1 truncate text-3xl font-semibold tracking-[-0.05em]">
               {token}
             </h2>
-            <p className="mt-1 truncate text-sm text-white/36">
+            <p className="mt-1 truncate text-sm text-[color:var(--nova-text-muted)]">
               {tokenData.name} · {chainName(tokenData.chain)} · {tokenData.dex}
             </p>
           </div>
@@ -3423,28 +4499,21 @@ function TokenHeader({
                 target="_blank"
                 rel="noreferrer"
                 title={label}
-                className="flex h-9 items-center justify-center text-white/70 opacity-75 drop-shadow-none transition duration-200 hover:-translate-y-px hover:text-cyan-50 hover:opacity-100 hover:drop-shadow-[0_0_10px_rgba(34,211,238,0.35)]"
+                className="flex h-9 items-center justify-center text-[color:var(--nova-text-soft)] opacity-75 drop-shadow-none transition duration-200 hover:-translate-y-px hover:text-[color:var(--nova-text)] hover:opacity-100 hover:drop-shadow-[0_0_10px_rgba(83,104,120,0.28)]"
               >
                 <Icon size={17} strokeWidth={1.75} />
               </a>
             ))}
-            <div className="rounded-full border border-cyan-100/10 bg-cyan-100/[0.04] px-4 py-2 text-sm text-cyan-100/70">
+            <div className="rounded-full nova-card-inner px-4 py-2 text-sm text-[color:var(--nova-accent)]">
               {chainLabel(tokenData.chain)}
             </div>
-            <button
-              type="button"
-              onClick={onAddToWatchlist}
-              className="rounded-full border border-purple-100/12 bg-purple-100/[0.045] px-4 py-2 text-xs text-purple-100/68 transition hover:bg-purple-100/[0.075]"
-            >
-              {watchlistStatus || "Add to Watchlist"}
-            </button>
             <button
               type="button"
               onClick={onToggleMantleMode}
               className={`rounded-full border px-4 py-2 text-xs transition ${
                 mantleContext.mantleModeActive
-                  ? "border-cyan-100/16 bg-cyan-100/[0.065] text-cyan-100/72"
-                  : "border-white/10 bg-white/[0.035] text-white/45 hover:bg-white/[0.055]"
+                  ? "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-accent)]"
+                  : "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-soft)] hover:nova-card-inner"
               }`}
             >
               Mantle Mode ·{" "}
@@ -3463,9 +4532,9 @@ function TokenHeader({
         {marketCards.map((card) => (
           <div
             key={card.label}
-            className="rounded-2xl border border-white/10 bg-black/20 p-3"
+            className="rounded-2xl nova-card-inner p-3"
           >
-            <p className="text-xs text-white/35">{card.label}</p>
+            <p className="text-xs text-[color:var(--nova-text-muted)]">{card.label}</p>
             <p className="mt-2 truncate text-lg font-semibold">{card.value}</p>
           </div>
         ))}
@@ -4184,9 +5253,9 @@ function signedHistoryDelta(delta: number | null) {
 }
 
 function historyDeltaClass(delta: number | null, invert = false) {
-  if (delta === null || delta === 0) return "text-white/42";
+  if (delta === null || delta === 0) return "text-[color:var(--nova-text-soft)]";
   const favorable = invert ? delta < 0 : delta > 0;
-  return favorable ? "text-cyan-100/72" : "text-amber-100/72";
+  return favorable ? "text-[color:var(--nova-accent)]" : "text-[color:var(--nova-warning)]";
 }
 
 function historyDirectionLabel(
@@ -4563,11 +5632,11 @@ function ConvictionHistorySection({
       />
 
       <div className="grid gap-4 xl:grid-cols-[0.88fr_1.12fr]">
-        <section className="rounded-[2rem] border border-cyan-100/10 bg-cyan-100/[0.025] p-5 shadow-[0_0_70px_rgba(34,211,238,0.035)]">
-          <p className="text-xs uppercase tracking-[0.3em] text-cyan-100/44">
+        <section className="rounded-[2rem] nova-card-inner p-5 shadow-[0_0_70px_rgba(83,104,120,0.035)]">
+          <p className="text-xs uppercase tracking-[0.3em] text-[color:var(--nova-accent)]">
             Conviction Timeline
           </p>
-          <p className="mt-2 text-xs text-white/32">
+          <p className="mt-2 text-xs text-[color:var(--nova-text-muted)]">
             {selection.rangeLabel} · Comparing real stored snapshots only.
           </p>
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -4575,7 +5644,7 @@ function ConvictionHistorySection({
             <HistoryStat
               label="Change"
               value={comparison ? signedHistoryDelta(comparison.scoreDelta) : "Baseline"}
-              tone={comparison ? historyDeltaClass(comparison.scoreDelta) : "text-white/55"}
+              tone={comparison ? historyDeltaClass(comparison.scoreDelta) : "text-[color:var(--nova-text-soft)]"}
             />
             <HistoryStat
               label="Previous"
@@ -4614,8 +5683,8 @@ function ConvictionHistorySection({
           </div>
         </section>
 
-        <section className="rounded-[2rem] border border-white/10 bg-white/[0.025] p-5">
-          <p className="text-xs uppercase tracking-[0.3em] text-cyan-100/44">
+        <section className="rounded-[2rem] nova-card-inner p-5">
+          <p className="text-xs uppercase tracking-[0.3em] text-[color:var(--nova-accent)]">
             Score Evolution
           </p>
           <div className="mt-4 space-y-2">
@@ -4630,18 +5699,18 @@ function ConvictionHistorySection({
               return (
               <div
                 key={snapshot.snapshotId}
-                className="flex items-center justify-between rounded-2xl border border-white/8 bg-black/20 px-4 py-3"
+                className="flex items-center justify-between rounded-2xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner px-4 py-3"
               >
                 <div>
-                  <p className="text-sm text-white/66">
+                  <p className="text-sm text-[color:var(--nova-text-soft)]">
                     {formatSnapshotTime(snapshot.createdAt)}
                   </p>
-                  <p className="mt-1 text-xs text-white/30">
+                  <p className="mt-1 text-xs text-[color:var(--nova-text-muted)]">
                     {snapshot.dataConfidence?.label || "Confidence unavailable"} confidence
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="text-xl font-semibold tabular-nums text-cyan-50/82">
+                  <p className="text-xl font-semibold tabular-nums text-[color:var(--nova-text)]">
                     {snapshot.finalConvictionScore}
                   </p>
                   <p
@@ -4671,10 +5740,10 @@ function ConvictionHistorySection({
         />
       ) : (
         <>
-          <p className="px-2 text-xs leading-relaxed text-white/34">
+          <p className="px-2 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
             {convictionReplayComparisonSubtitle(timeframe)}
           </p>
-          <section className="rounded-[2rem] border border-white/10 bg-white/[0.025] p-5">
+          <section className="rounded-[2rem] nova-card-inner p-5">
             <HistorySectionTitle
               eyebrow="Driver Analysis"
               title="Measured score movement"
@@ -4698,7 +5767,7 @@ function ConvictionHistorySection({
           </section>
 
           <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
-            <section className="rounded-[2rem] border border-cyan-100/10 bg-cyan-100/[0.025] p-5">
+            <section className="rounded-[2rem] nova-card-inner p-5">
               <HistorySectionTitle
                 eyebrow="Why Conviction Changed"
                 title={measuredReplayExplanation}
@@ -4724,7 +5793,7 @@ function ConvictionHistorySection({
               />
             </section>
 
-            <section className="rounded-[2rem] border border-white/10 bg-white/[0.025] p-5">
+            <section className="rounded-[2rem] nova-card-inner p-5">
               <HistorySectionTitle
                 eyebrow="Confidence Evolution"
                 title={comparison.confidenceShiftSummary}
@@ -4743,7 +5812,7 @@ function ConvictionHistorySection({
             </section>
           </div>
 
-          <section className="rounded-[2rem] border border-white/10 bg-white/[0.025] p-5">
+          <section className="rounded-[2rem] nova-card-inner p-5">
             <HistorySectionTitle
               eyebrow="Risk Evolution"
               title="Structural risk replay"
@@ -4763,7 +5832,7 @@ function ConvictionHistorySection({
             </div>
           </section>
 
-          <section className="rounded-[2rem] border border-cyan-100/12 bg-cyan-100/[0.025] p-5 shadow-[0_0_80px_rgba(34,211,238,0.04)]">
+          <section className="rounded-[2rem] nova-card-inner p-5 shadow-[0_0_80px_rgba(83,104,120,0.04)]">
             <HistorySectionTitle
               eyebrow="Conviction Forensics"
               title="Largest measured movements"
@@ -4814,7 +5883,7 @@ function ConvictionHistorySection({
               />
             </div>
           </section>
-          <p className="px-2 text-xs leading-relaxed text-white/28">
+          <p className="px-2 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
             Conviction History only compares stored local snapshots. No generated
             events or interpolated timeline points.
           </p>
@@ -4843,13 +5912,13 @@ function HistoryLocalStatus({
   text: string;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.5rem] border border-white/8 bg-black/16 px-4 py-3">
-      <p className="text-xs text-white/38">{text}</p>
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.5rem] border border-[color:rgba(83,104,120,0.14)] nova-card-inner px-4 py-3">
+      <p className="text-xs text-[color:var(--nova-text-muted)]">{text}</p>
       {showClear && onClear && (
         <button
           type="button"
           onClick={onClear}
-          className="rounded-full border border-white/8 bg-white/[0.025] px-3 py-1.5 text-xs text-white/32 transition hover:border-amber-100/16 hover:text-amber-100/58"
+          className="rounded-full border border-[color:rgba(83,104,120,0.14)] nova-card-inner px-3 py-1.5 text-xs text-[color:var(--nova-text-muted)] transition hover:border-[color:var(--nova-border)] hover:text-[color:var(--nova-warning)]"
         >
           Clear local history for this token
         </button>
@@ -4868,12 +5937,12 @@ function ConvictionHistoryTimeframeTabs({
   selected: ConvictionHistoryTimeframe;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[2rem] border border-white/10 bg-white/[0.025] px-4 py-3">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[2rem] nova-card-inner px-4 py-3">
       <div>
-        <p className="text-xs uppercase tracking-[0.24em] text-cyan-100/42">
+        <p className="text-xs uppercase tracking-[0.24em] text-[color:var(--nova-accent-soft)]">
           Replay Window
         </p>
-        <p className="mt-1 text-xs text-white/30">
+        <p className="mt-1 text-xs text-[color:var(--nova-text-muted)]">
           {disabled
             ? "Replay requires at least two real snapshots."
             : "Choose a measured snapshot range."}
@@ -4888,8 +5957,8 @@ function ConvictionHistoryTimeframeTabs({
             onClick={() => onSelect(option.value)}
             className={`rounded-full border px-3 py-1.5 text-xs transition ${
               option.value === selected
-                ? "border-cyan-100/18 bg-cyan-100/[0.07] text-cyan-50/76"
-                : "border-white/8 bg-black/16 text-white/36 hover:border-cyan-100/12 hover:text-white/58"
+                ? "border-[color:var(--nova-border-strong)] bg-[rgba(83,104,120,0.1)] text-[color:var(--nova-text)]"
+                : "border-[color:rgba(83,104,120,0.14)] nova-card-inner text-[color:var(--nova-text-muted)] hover:border-[color:var(--nova-border)] hover:text-[color:var(--nova-text-soft)]"
             } ${disabled ? "cursor-not-allowed opacity-45" : ""}`}
           >
             {option.label}
@@ -4913,30 +5982,30 @@ function HistoryTimeframeLockedState({
 }) {
   return (
     <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
-      <div className="rounded-[2rem] border border-cyan-100/10 bg-cyan-100/[0.025] p-6">
-        <p className="text-xs uppercase tracking-[0.3em] text-cyan-100/44">
+      <div className="rounded-[2rem] nova-card-inner p-6">
+        <p className="text-xs uppercase tracking-[0.3em] text-[color:var(--nova-accent)]">
           Baseline Snapshot Stored Locally
         </p>
-        <p className="mt-3 text-lg font-semibold text-white/76">
+        <p className="mt-3 text-lg font-semibold text-[color:var(--nova-text)]">
           Current conviction is {current.finalConvictionScore}.
         </p>
-        <p className="mt-3 text-sm font-medium text-cyan-50/62">
+        <p className="mt-3 text-sm font-medium text-[color:var(--nova-text)]">
           {snapshotCount} / 2 snapshots required for replay
         </p>
-        <p className="mt-2 text-sm leading-relaxed text-white/48">
+        <p className="mt-2 text-sm leading-relaxed text-[color:var(--nova-text-soft)]">
           Baseline snapshot stored locally. Run another successful analysis later to unlock measured change analysis.
         </p>
       </div>
 
-      <div className="rounded-[2rem] border border-white/10 bg-white/[0.025] p-6">
-        <p className="text-xs uppercase tracking-[0.3em] text-white/38">
+      <div className="rounded-[2rem] nova-card-inner p-6">
+        <p className="text-xs uppercase tracking-[0.3em] text-[color:var(--nova-text-muted)]">
           Replay Locked for This Timeframe
         </p>
-        <p className="mt-3 text-sm font-medium text-white/62">
+        <p className="mt-3 text-sm font-medium text-[color:var(--nova-text-soft)]">
           {convictionReplayWindowText(timeframe)}
         </p>
-        <p className="mt-2 text-sm leading-relaxed text-white/48">{reason}</p>
-        <p className="mt-3 text-xs leading-relaxed text-white/30">
+        <p className="mt-2 text-sm leading-relaxed text-[color:var(--nova-text-soft)]">{reason}</p>
+        <p className="mt-3 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
           NovaOS does not borrow snapshots from outside the selected range and never
           generates interpolated history.
         </p>
@@ -4947,7 +6016,7 @@ function HistoryTimeframeLockedState({
 
 function HistoryStat({
   label,
-  tone = "text-white/76",
+  tone = "text-[color:var(--nova-text)]",
   value,
 }: {
   label: string;
@@ -4955,8 +6024,8 @@ function HistoryStat({
   value: string | number;
 }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/20 p-3">
-      <p className="text-xs uppercase tracking-[0.18em] text-white/32">{label}</p>
+    <div className="rounded-2xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner p-3">
+      <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">{label}</p>
       <p className={`mt-2 text-lg font-semibold capitalize tabular-nums ${tone}`}>
         {value}
       </p>
@@ -4975,11 +6044,11 @@ function HistorySectionTitle({
 }) {
   return (
     <div>
-      <p className="text-xs uppercase tracking-[0.3em] text-cyan-100/44">{eyebrow}</p>
-      <h3 className="mt-2 text-lg font-semibold tracking-[-0.035em] text-white/78">
+      <p className="text-xs uppercase tracking-[0.3em] text-[color:var(--nova-accent)]">{eyebrow}</p>
+      <h3 className="mt-2 text-lg font-semibold tracking-[-0.035em] text-[color:var(--nova-text)]">
         {title}
       </h3>
-      <p className="mt-2 text-xs leading-relaxed text-white/34">{description}</p>
+      <p className="mt-2 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">{description}</p>
     </div>
   );
 }
@@ -4998,10 +6067,10 @@ function HistoryEvolutionRow({
   previousValue: number | null;
 }) {
   return (
-    <div className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-2xl border border-white/8 bg-black/18 px-4 py-3">
-      <p className="text-sm text-white/58">{label}</p>
-      <p className="text-sm tabular-nums text-white/52">
-        {previousValue ?? "—"} <span className="px-1 text-white/20">›</span>{" "}
+    <div className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-2xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner px-4 py-3">
+      <p className="text-sm text-[color:var(--nova-text-soft)]">{label}</p>
+      <p className="text-sm tabular-nums text-[color:var(--nova-text-soft)]">
+        {previousValue ?? "—"} <span className="px-1 text-[color:var(--nova-text-muted)]">›</span>{" "}
         {currentValue ?? "—"}
       </p>
       <p className={`w-12 text-right text-sm tabular-nums ${historyDeltaClass(delta, invert)}`}>
@@ -5019,28 +6088,28 @@ function HistoryDriverList({
   title: string;
 }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/18 p-4">
-      <p className="text-xs uppercase tracking-[0.2em] text-white/34">{title}</p>
+    <div className="rounded-2xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner p-4">
+      <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--nova-text-muted)]">{title}</p>
       <div className="mt-3 space-y-2">
         {items.length ? (
           items.slice(0, 4).map((item) => (
             <div key={`${item.kind}-${item.label}`} className="space-y-1.5">
               <div className="flex items-center justify-between gap-3">
-                <span className="text-sm text-white/58">{item.label}</span>
+                <span className="text-sm text-[color:var(--nova-text-soft)]">{item.label}</span>
                 <span className={historyDeltaClass(item.delta, item.kind === "risk")}>
                   {item.previousValue ?? "—"}{" "}
-                  <span className="text-white/20">›</span>{" "}
+                  <span className="text-[color:var(--nova-text-muted)]">›</span>{" "}
                   {item.currentValue ?? "—"}{" "}
                   <span className="ml-1 tabular-nums">
                     ({signedHistoryDelta(item.delta)})
                   </span>
                 </span>
               </div>
-              <p className="text-xs leading-relaxed text-white/30">{item.reason}</p>
+              <p className="text-xs leading-relaxed text-[color:var(--nova-text-muted)]">{item.reason}</p>
             </div>
           ))
         ) : (
-          <p className="text-xs text-white/28">None measured in this replay interval.</p>
+          <p className="text-xs text-[color:var(--nova-text-muted)]">None measured in this replay interval.</p>
         )}
       </div>
     </div>
@@ -5057,17 +6126,17 @@ function HistoryMeasuredList({
   title: string;
 }) {
   return (
-    <div className={`rounded-2xl border border-white/8 bg-black/18 p-4 ${className}`}>
-      <p className="text-xs uppercase tracking-[0.2em] text-white/34">{title}</p>
+    <div className={`rounded-2xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner p-4 ${className}`}>
+      <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--nova-text-muted)]">{title}</p>
       <div className="mt-3 space-y-2">
         {items.length ? (
           items.slice(0, 4).map((item) => (
-            <p key={item} className="text-sm leading-relaxed text-white/52">
+            <p key={item} className="text-sm leading-relaxed text-[color:var(--nova-text-soft)]">
               {item}
             </p>
           ))
         ) : (
-          <p className="text-xs text-white/28">None measured in this replay interval.</p>
+          <p className="text-xs text-[color:var(--nova-text-muted)]">None measured in this replay interval.</p>
         )}
       </div>
     </div>
@@ -5076,9 +6145,9 @@ function HistoryMeasuredList({
 
 function ForensicCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/20 p-4">
-      <p className="text-xs uppercase tracking-[0.18em] text-white/32">{label}</p>
-      <p className="mt-3 text-sm font-medium text-white/68">{value}</p>
+    <div className="rounded-2xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner p-4">
+      <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">{label}</p>
+      <p className="mt-3 text-sm font-medium text-[color:var(--nova-text-soft)]">{value}</p>
     </div>
   );
 }
@@ -5106,16 +6175,16 @@ function AIThesis({
     : data?.thesis.riskNotes || [];
 
   return (
-    <div className="relative overflow-hidden rounded-[2rem] border border-cyan-100/12 bg-cyan-100/[0.024] p-4 shadow-[0_0_80px_rgba(34,211,238,0.045)] backdrop-blur-2xl">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,rgba(180,240,255,0.09),transparent_42%)]" />
+    <div className="relative overflow-hidden rounded-[2rem] border border-[color:var(--nova-border)] bg-[rgba(83,104,120,0.04)] p-4 shadow-[0_0_80px_rgba(83,104,120,0.045)] backdrop-blur-2xl">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,rgba(127,144,150,0.09),transparent_42%)]" />
 
       <div className="relative">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-[0.35em] text-cyan-100/45">
+            <p className="text-xs uppercase tracking-[0.35em] text-[color:var(--nova-accent-soft)]">
               Explainable Intelligence
             </p>
-            <p className="mt-1 text-xs text-white/30">Token thesis report</p>
+            <p className="mt-1 text-xs text-[color:var(--nova-text-muted)]">Token thesis report</p>
           </div>
           <span className={`rounded-full border px-3 py-1 text-xs ${thesisConfidenceClass(confidence)}`}>
             {confidence} confidence
@@ -5123,11 +6192,11 @@ function AIThesis({
         </div>
 
         {loadState === "idle" && (
-          <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
-            <p className="text-sm font-medium text-white/68">
+          <div className="mt-4 rounded-2xl nova-card-inner p-4">
+            <p className="text-sm font-medium text-[color:var(--nova-text-soft)]">
               Select a token to generate an explainable intelligence report.
             </p>
-            <p className="mt-2 text-xs leading-relaxed text-white/35">
+            <p className="mt-2 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
               NovaOS will summarize holder distribution, wallet metadata and
               recent activity signals without claiming PnL, win rate or smart
               money identity.
@@ -5138,11 +6207,11 @@ function AIThesis({
         {loadState === "loading" && <ThesisReportSkeleton />}
 
         {loadState === "error" && (
-          <div className="mt-4 rounded-2xl border border-red-100/10 bg-red-100/[0.035] p-4">
-            <p className="text-sm font-medium text-red-100/68">
+          <div className="mt-4 rounded-2xl nova-card-inner p-4">
+            <p className="text-sm font-medium text-[color:var(--nova-text-soft)]">
               Token intelligence report unavailable.
             </p>
-            <p className="mt-2 text-xs leading-relaxed text-red-100/50">
+            <p className="mt-2 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
               {error || "Token intelligence summary could not be loaded."}
             </p>
           </div>
@@ -5150,19 +6219,19 @@ function AIThesis({
 
         {loadState === "loaded" && (data || report.thesisHeadline) && (
           <>
-            <div className="mt-4 rounded-2xl border border-white/10 bg-black/24 p-4">
+            <div className="mt-4 rounded-2xl border border-[color:var(--nova-border)] nova-card-inner p-4">
               <div className="mb-2 flex items-center gap-2">
-                <span className="h-1.5 w-1.5 rounded-full bg-cyan-100/70 shadow-[0_0_12px_rgba(180,240,255,0.65)]" />
-                <p className="text-xs uppercase tracking-[0.22em] text-white/32">
+                <span className="h-1.5 w-1.5 rounded-full bg-[rgba(83,104,120,0.70)] shadow-[0_0_12px_rgba(83,104,120,0.36)]" />
+                <p className="text-xs uppercase tracking-[0.22em] text-[color:var(--nova-text-muted)]">
                   Thesis headline
                 </p>
               </div>
-              <p className="min-h-[44px] text-sm leading-relaxed text-white/68">
+              <p className="min-h-[44px] text-sm leading-relaxed text-[color:var(--nova-text-soft)]">
                 {typedThesis}
                 <motion.span
                   animate={{ opacity: [0, 1, 0] }}
                   transition={{ duration: 1, repeat: Infinity }}
-                  className="ml-1 text-cyan-100"
+                  className="ml-1 text-[color:var(--nova-accent)]"
                 >
                   |
                 </motion.span>
@@ -5202,13 +6271,13 @@ function AIThesis({
         )}
 
         <div className="mt-4">
-          <div className="mb-2 flex items-center justify-between text-xs text-white/35">
+          <div className="mb-2 flex items-center justify-between text-xs text-[color:var(--nova-text-muted)]">
             <span>Methodology</span>
             <span>Explainable V2</span>
           </div>
-          <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
+          <div className="h-2 overflow-hidden rounded-full nova-card-inner">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-[#022026] via-cyan-100/70 to-[#192638]"
+              className="h-full rounded-full bg-gradient-to-r from-[#536878] via-[rgba(83,104,120,0.58)] to-[#0A0A0A]"
               style={{
                 width: `${Math.max(
                   8,
@@ -5217,7 +6286,7 @@ function AIThesis({
               }}
             />
           </div>
-          <p className="mt-2 text-xs leading-relaxed text-white/32">
+          <p className="mt-2 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
             {report.methodology}
           </p>
         </div>
@@ -5232,24 +6301,24 @@ function MantleEcosystemContextPanel({
   mantleContext: MantleContext;
 }) {
   return (
-    <section className="mt-4 overflow-hidden rounded-[2rem] border border-cyan-100/10 bg-cyan-100/[0.025] p-4 shadow-[0_0_80px_rgba(34,211,238,0.045)] backdrop-blur-2xl">
+    <section className="mt-4 overflow-hidden rounded-[2rem] nova-card-inner p-4 shadow-[0_0_80px_rgba(83,104,120,0.045)] backdrop-blur-2xl">
       <div className="pointer-events-none absolute inset-0" />
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="max-w-2xl">
           <div className="flex flex-wrap items-center gap-3">
-            <p className="text-xs uppercase tracking-[0.35em] text-cyan-100/45">
+            <p className="text-xs uppercase tracking-[0.35em] text-[color:var(--nova-accent-soft)]">
               Mantle Mode
             </p>
-            <span className="rounded-full border border-cyan-100/10 bg-cyan-100/[0.045] px-3 py-1 text-xs text-cyan-100/62">
+            <span className="rounded-full nova-card-inner px-3 py-1 text-xs text-[color:var(--nova-accent-soft)]">
               {mantleContext.isMantleAsset
                 ? "Active Mantle asset"
                 : "Manual preview"}
             </span>
           </div>
-          <h3 className="mt-3 text-xl font-semibold tracking-[-0.05em] text-white/82">
+          <h3 className="mt-3 text-xl font-semibold tracking-[-0.05em] text-[color:var(--nova-text)]">
             Mantle-native analysis layer
           </h3>
-          <p className="mt-2 text-sm leading-relaxed text-white/40">
+          <p className="mt-2 text-sm leading-relaxed text-[color:var(--nova-text-soft)]">
             NovaOS is prepared to apply holder intelligence, wallet behavior and
             cluster inference to Mantle ecosystem assets. Mantle-specific DeFi
             metrics are not live yet.
@@ -5281,16 +6350,16 @@ function MantleContextList({
   const isPlanned = title.toLowerCase().includes("planned");
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
-      <p className="text-xs text-white/35">{title}</p>
+    <div className="rounded-2xl nova-card-inner p-3">
+      <p className="text-xs text-[color:var(--nova-text-muted)]">{title}</p>
       <div className="mt-3 space-y-2">
         {items.map((item) => (
-          <div key={item} className="flex items-start gap-2 text-xs text-white/48">
-            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-100/55 shadow-[0_0_10px_rgba(180,240,255,0.36)]" />
+          <div key={item} className="flex items-start gap-2 text-xs text-[color:var(--nova-text-soft)]">
+            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[rgba(83,104,120,0.55)] shadow-[0_0_10px_rgba(83,104,120,0.28)]" />
             <span>
               {item}
               {isPlanned && (
-                <span className="ml-2 text-cyan-100/42">planned</span>
+                <span className="ml-2 text-[color:var(--nova-accent-soft)]">planned</span>
               )}
             </span>
           </div>
@@ -5314,18 +6383,18 @@ function VerifiedOnMantlePanel({
   onCreateSnapshot: () => void;
 }) {
   return (
-    <section className="mt-4 overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 backdrop-blur-2xl">
+    <section className="mt-4 overflow-hidden rounded-[2rem] nova-card-inner p-4 backdrop-blur-2xl">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-3">
-            <p className="text-xs uppercase tracking-[0.35em] text-cyan-100/45">
+            <p className="text-xs uppercase tracking-[0.35em] text-[color:var(--nova-accent-soft)]">
               Verified on Mantle
             </p>
-            <span className="rounded-full border border-amber-100/12 bg-amber-100/[0.045] px-3 py-1 text-xs text-amber-100/62">
+            <span className="rounded-full nova-card-inner px-3 py-1 text-xs text-[color:var(--nova-warning)]">
               Local preview
             </span>
           </div>
-          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-white/40">
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[color:var(--nova-text-soft)]">
             Create a deterministic local decision snapshot from the current
             token intelligence scores. Not submitted on-chain yet; Mantle
             verification layer planned.
@@ -5337,11 +6406,11 @@ function VerifiedOnMantlePanel({
             type="button"
             disabled={!hasTokenIntelligence || loadState === "loading"}
             onClick={onCreateSnapshot}
-            className="rounded-full border border-cyan-100/12 bg-cyan-100/[0.045] px-4 py-2 text-xs text-cyan-100/66 transition hover:bg-cyan-100/[0.075] disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-full nova-card-inner px-4 py-2 text-xs text-[color:var(--nova-accent-soft)] transition hover:nova-card-inner disabled:cursor-not-allowed disabled:opacity-40"
           >
             {loadState === "loading" ? "Creating preview..." : "Create snapshot"}
           </button>
-          <span className="text-xs text-white/30">
+          <span className="text-xs text-[color:var(--nova-text-muted)]">
             {hasTokenIntelligence
               ? "On-chain verification planned"
               : "Token intelligence required"}
@@ -5350,9 +6419,9 @@ function VerifiedOnMantlePanel({
       </div>
 
       {(decisionSnapshot || loadState === "error") && (
-        <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-3">
+        <div className="mt-4 rounded-2xl nova-card-inner p-3">
           {loadState === "error" && (
-            <p className="text-xs leading-relaxed text-red-100/60">
+            <p className="text-xs leading-relaxed text-[color:var(--nova-danger)]">
               {error || "Decision snapshot could not be created."}
             </p>
           )}
@@ -5360,15 +6429,15 @@ function VerifiedOnMantlePanel({
           {decisionSnapshot && (
             <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
               <div>
-                <p className="font-mono text-sm text-cyan-100/70">
+                <p className="font-mono text-sm text-[color:var(--nova-accent)]">
                   {shortHash(decisionSnapshot.snapshotHash)}
                 </p>
-                <p className="mt-1 text-xs text-white/32">
+                <p className="mt-1 text-xs text-[color:var(--nova-text-muted)]">
                   Snapshot status: local preview · Verification: not submitted
                   on-chain yet
                 </p>
               </div>
-              <div className="rounded-full border border-white/10 bg-white/[0.035] px-3 py-1 text-xs text-white/45">
+              <div className="rounded-full nova-card-inner px-3 py-1 text-xs text-[color:var(--nova-text-soft)]">
                 Mantle contract not deployed yet
               </div>
             </div>
@@ -5389,16 +6458,16 @@ function ThesisList({
   tone: "cyan" | "amber";
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
-      <p className="text-xs text-white/35">{title}</p>
-      <ul className="mt-2 space-y-2 text-xs leading-relaxed text-white/50">
+    <div className="rounded-2xl nova-card-inner p-3">
+      <p className="text-xs text-[color:var(--nova-text-muted)]">{title}</p>
+      <ul className="mt-2 space-y-2 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
         {items.map((item) => (
           <li key={item} className="flex gap-2">
             <span
               className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
                 tone === "cyan"
-                  ? "bg-cyan-100/60 shadow-[0_0_10px_rgba(180,240,255,0.45)]"
-                  : "bg-amber-100/55 shadow-[0_0_10px_rgba(253,230,138,0.28)]"
+                  ? "bg-[var(--nova-slate)] shadow-[0_0_10px_rgba(127,144,150,0.34)]"
+                  : "bg-[rgba(83,104,120,0.42)] shadow-[0_0_10px_rgba(83,104,120,0.22)]"
               }`}
             />
             <span>{item}</span>
@@ -5412,7 +6481,7 @@ function ThesisList({
 function ThesisReportSkeleton() {
   return (
     <div className="mt-4 space-y-3">
-      <div className="rounded-2xl border border-white/10 bg-black/24 p-4">
+      <div className="rounded-2xl border border-[color:var(--nova-border)] nova-card-inner p-4">
         <SkeletonLine className="h-3 w-36" />
         <SkeletonLine className="mt-4 h-2 w-full" />
         <SkeletonLine className="mt-2 h-2 w-5/6" />
@@ -5421,7 +6490,7 @@ function ThesisReportSkeleton() {
         {Array.from({ length: 2 }).map((_, index) => (
           <div
             key={index}
-            className="rounded-2xl border border-white/10 bg-black/20 p-3"
+            className="rounded-2xl nova-card-inner p-3"
           >
             <SkeletonLine className="h-2 w-24" />
             <SkeletonLine className="mt-3 h-2 w-full" />
@@ -5442,27 +6511,27 @@ function ReportMiniMetric({
   value: number;
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-3">
-      <p className="text-xs text-white/30">{label}</p>
-      <p className="mt-1 text-lg font-semibold text-white/75">{value}</p>
+    <div className="rounded-2xl nova-card-inner p-3">
+      <p className="text-xs text-[color:var(--nova-text-muted)]">{label}</p>
+      <p className="mt-1 text-lg font-semibold text-[color:var(--nova-text)]">{value}</p>
     </div>
   );
 }
 
 function thesisConfidenceClass(confidence: string) {
   if (confidence === "High") {
-    return "border-emerald-100/15 bg-emerald-100/[0.05] text-emerald-100/68";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-success)]";
   }
 
   if (confidence === "Medium") {
-    return "border-cyan-100/12 bg-cyan-100/[0.045] text-cyan-100/66";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-accent-soft)]";
   }
 
   if (confidence === "Low") {
-    return "border-amber-100/14 bg-amber-100/[0.045] text-amber-100/62";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-warning)]";
   }
 
-  return "border-white/10 bg-white/[0.035] text-white/45";
+  return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-soft)]";
 }
 
 function ConvictionRing({
@@ -5483,26 +6552,26 @@ function ConvictionRing({
   const ringSize = compact ? "h-64 w-64" : "h-44 w-44";
   const scoreSize = compact ? "text-5xl" : "text-5xl";
   const cardClass = compact
-    ? "relative overflow-hidden rounded-[2rem] border border-cyan-100/10 bg-black/12 p-4 shadow-[0_0_80px_rgba(34,211,238,0.045)] backdrop-blur-2xl"
-    : "relative overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 backdrop-blur-2xl";
+    ? "relative overflow-hidden rounded-[2rem] nova-card-inner p-4 shadow-[0_0_80px_rgba(83,104,120,0.045)] backdrop-blur-2xl"
+    : "relative overflow-hidden rounded-[2rem] nova-card-inner p-4 backdrop-blur-2xl";
 
   return (
     <div className={cardClass}>
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_44%,rgba(1,44,59,0.42),transparent_62%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_44%,rgba(16,18,19,0.68),transparent_62%)]" />
       <div className={`relative flex h-full ${cardMinHeight} flex-col items-center justify-center text-center`}>
         <div className={`relative flex ${ringSize} items-center justify-center`}>
-          <div className="absolute -inset-10 rounded-full bg-cyan-900/20 blur-[70px]" />
-          <div className="absolute inset-0 rounded-full border border-cyan-100/14 bg-[radial-gradient(circle_at_34%_28%,rgba(175,235,255,0.16),rgba(1,44,59,0.42)_42%,rgba(2,4,7,0.92)_76%)] shadow-[0_0_90px_rgba(56,189,248,0.12)]" />
+          <div className="absolute -inset-10 rounded-full bg-[rgba(178,190,181,0.12)] blur-[70px]" />
+          <div className="absolute inset-0 rounded-full border border-[color:var(--nova-border)] bg-[radial-gradient(circle_at_34%_28%,rgba(127,144,150,0.15),rgba(16,18,19,0.68)_42%,rgba(10,10,10,0.94)_76%)] shadow-[0_0_90px_rgba(83,104,120,0.14)]" />
 
           <motion.div
             animate={{ rotate: 360 }}
             transition={{ duration: compact ? 28 : 22, repeat: Infinity, ease: "linear" }}
             className="absolute inset-0 rounded-full"
           >
-            <div className="absolute inset-4 rounded-full border border-cyan-100/12" />
-            <div className="absolute inset-10 rounded-full border border-white/8" />
-            <div className="absolute left-1/2 top-1/2 h-[1px] w-[135%] -translate-x-1/2 -translate-y-1/2 rotate-12 bg-gradient-to-r from-transparent via-cyan-100/20 to-transparent" />
-            <div className="absolute left-1/2 top-1/2 h-[1px] w-[128%] -translate-x-1/2 -translate-y-1/2 -rotate-12 bg-gradient-to-r from-transparent via-purple-200/14 to-transparent" />
+            <div className="absolute inset-4 rounded-full border border-[color:var(--nova-border)]" />
+            <div className="absolute inset-10 rounded-full border border-[color:rgba(83,104,120,0.14)]" />
+            <div className="absolute left-1/2 top-1/2 h-[1px] w-[135%] -translate-x-1/2 -translate-y-1/2 rotate-12 bg-gradient-to-r from-transparent via-[rgba(83,104,120,0.2)] to-transparent" />
+            <div className="absolute left-1/2 top-1/2 h-[1px] w-[128%] -translate-x-1/2 -translate-y-1/2 -rotate-12 bg-gradient-to-r from-transparent via-[rgba(94,114,107,0.16)] to-transparent" />
           </motion.div>
 
           <svg className="absolute inset-0 h-full w-full -rotate-90" viewBox="0 0 176 176">
@@ -5510,7 +6579,7 @@ function ConvictionRing({
               cx="88"
               cy="88"
               r="72"
-              stroke="rgba(255,255,255,0.06)"
+              stroke="rgba(83,104,120,0.12)"
               strokeWidth="6"
               fill="transparent"
             />
@@ -5519,7 +6588,7 @@ function ConvictionRing({
                 cx="88"
                 cy="88"
                 r="72"
-                stroke="rgba(180,240,255,0.95)"
+                stroke="rgba(127,144,150,0.92)"
                 strokeWidth="6"
                 fill="transparent"
                 strokeLinecap="round"
@@ -5533,7 +6602,7 @@ function ConvictionRing({
                 cx="88"
                 cy="88"
                 r="72"
-                stroke="rgba(180,240,255,0.22)"
+                stroke="rgba(127,144,150,0.22)"
                 strokeWidth="6"
                 fill="transparent"
                 strokeLinecap="round"
@@ -5547,13 +6616,13 @@ function ConvictionRing({
             <p className={`${scoreSize} font-semibold tracking-[-0.08em]`}>
               {displayScore}
             </p>
-          <p className="mt-1 text-xs uppercase tracking-[0.3em] text-cyan-100/45">
+          <p className="mt-1 text-xs uppercase tracking-[0.3em] text-[color:var(--nova-accent-soft)]">
               Nova Conviction
             </p>
           </div>
         </div>
 
-        <p className="mt-2 max-w-[14rem] text-xs font-light leading-relaxed text-white/36">
+        <p className="mt-2 max-w-[14rem] text-xs font-light leading-relaxed text-[color:var(--nova-text-muted)]">
           {compact
             ? `${confidenceLabel || "Pending"} confidence`
             : `Nova Conviction uses holder quality, structural safety, and market integrity. ${
@@ -5565,73 +6634,288 @@ function ConvictionRing({
   );
 }
 
-function OverviewScoreStrip({
+function OverviewExecutiveSummary({
   conviction,
   formulaV3,
   insiderRiskV2,
+  novaConviction,
   state,
   tokenFlowSummaryV2,
 }: {
   conviction: ExplainableConvictionData | null;
   formulaV3: ConvictionFormulaV3Result | null;
   insiderRiskV2: InsiderRiskV2Result;
+  novaConviction: NovaConvictionResult | null;
   state: HolderLoadState;
   tokenFlowSummaryV2: TokenFlowSummaryV2 | null;
 }) {
   const walletFlowScore = tokenFlowSummaryV2
     ? overviewWalletFlowScore(tokenFlowSummaryV2)
     : null;
-  const items = [
-    [
-      "Holder Quality",
-      formulaV3?.pillarScores.holderQualityScore,
-      formulaV3 ? "Nova Conviction holder quality" : "Holder quality unavailable",
-    ],
-    [
-      "Structural Safety",
-      formulaV3?.pillarScores.structuralSafetyScore,
-      formulaV3 ? "Nova Conviction structural safety" : "Structural safety unavailable",
-    ],
-    [
-      "Market Integrity",
-      formulaV3?.pillarScores.marketIntegrityScore,
-      formulaV3 ? "Nova Conviction market integrity" : "Market integrity unavailable",
-    ],
-    [
-      "Wallet Flow",
-      walletFlowScore,
-      tokenFlowSummaryV2
-        ? walletFlowOverviewSubtitle(tokenFlowSummaryV2)
-        : "Wallet Flow V2 unavailable",
-    ],
-    [
-      "Insider Risk",
-      insiderRiskV2.insiderRiskScore,
-      "Insider Mathematics V2 risk pressure",
-      true,
-    ],
-    [
-      "Data Confidence",
-      conviction?.dataConfidence.score,
-      conviction
-        ? `${conviction.dataConfidence.label} conviction data confidence`
-        : "Conviction data confidence unavailable",
-    ],
-  ] as const;
   const isPending = state === "loading";
+  const primaryItems: Array<{
+    inverseTone?: boolean;
+    label: string;
+    score: number | null | undefined;
+  }> = [
+    {
+      label: "Nova Conviction",
+      score:
+        novaConviction?.novaConvictionScore ??
+        formulaV3?.finalConvictionScoreV3 ??
+        conviction?.finalConvictionScore ??
+        null,
+    },
+    {
+      label: "Risk Score",
+      score: novaConviction?.risk.riskScore ?? insiderRiskV2.insiderRiskScore ?? null,
+      inverseTone: true,
+    },
+  ];
+  const secondaryItems: Array<{
+    inverseTone?: boolean;
+    label: string;
+    score: number | null | undefined;
+  }> = [
+    {
+      label: "Holder Quality",
+      score:
+        novaConviction?.scores.holderAlpha ??
+        formulaV3?.pillarScores.holderQualityScore ??
+        null,
+    },
+    {
+      label: "Smart Money",
+      score: novaConviction?.scores.smartMoneyFlow ?? walletFlowScore,
+    },
+    {
+      label: "Liquidity Health",
+      score:
+        novaConviction?.scores.liquidityHealth ??
+        conviction?.subScores.liquidityTrust ??
+        null,
+    },
+    {
+      label: "Data Confidence",
+      score: novaConviction?.scores.dataConfidence ?? conviction?.dataConfidence.score ?? null,
+    },
+  ];
+  const scoreItems = [...primaryItems, ...secondaryItems];
 
   return (
-    <div className="grid h-full min-h-[420px] grid-cols-2 grid-rows-3 gap-3">
-      {items.map(([title, score, detail, inverseTone]) => (
-        <OverviewScoreOrb
-          key={title}
-          pending={isPending}
-          score={typeof score === "number" ? score : null}
-          detail={detail}
-          inverseTone={Boolean(inverseTone)}
-          title={title}
+    <div className="flex min-h-[640px] flex-col">
+      <div className="grid flex-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
+        {scoreItems.map((item) => (
+          <OverviewExecutiveScoreCard
+            key={item.label}
+            inverseTone={item.inverseTone}
+            label={item.label}
+            pending={isPending}
+            score={typeof item.score === "number" ? item.score : null}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OverviewTop10HolderIntelligence({
+  novaConviction,
+  state,
+}: {
+  novaConviction: NovaConvictionResult | null;
+  state: HolderLoadState;
+}) {
+  const rows = buildOverviewTop10HolderRows(novaConviction);
+  const isLoading = state === "loading";
+
+  return (
+    <section className="nova-terminal-card overflow-hidden rounded-[2rem]">
+      <div className="flex flex-col gap-2 border-b border-[color:var(--nova-border)] p-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--nova-accent-soft)]">
+            Holder Intelligence
+          </p>
+          <h2 className="mt-1 text-xl font-semibold tracking-[-0.045em] text-[color:var(--nova-text)]">
+            Top 10 Holder Intelligence
+          </h2>
+        </div>
+        <span className="w-fit rounded-full nova-card-inner px-3 py-1 text-xs text-[color:var(--nova-text-soft)]">
+          {rows.length ? `${rows.length} shown` : "Pending"}
+        </span>
+      </div>
+
+      <div className="overflow-x-auto">
+        <div className={`grid min-w-[820px] grid-cols-[minmax(160px,1.25fr)_72px_120px_90px_150px_100px] gap-3 ${terminalTableHeaderClass}`}>
+          <span>Wallet</span>
+          <span className="text-center">Rank</span>
+          <span className="text-center">Ownership</span>
+          <span className="text-center">Score</span>
+          <span className="text-center">Behavior</span>
+          <span className="text-center">Analysis</span>
+        </div>
+
+        {isLoading ? (
+          <div className="p-4">
+            <SkeletonLine className="h-3 w-48" />
+            <SkeletonLine className="mt-3 h-3 w-72" />
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="p-4 text-sm text-[color:var(--nova-text-muted)]">
+            Holder intelligence will appear after analysis completes.
+          </div>
+        ) : (
+          rows.map((row) => (
+            <div
+              key={`${row.rank ?? "unranked"}-${row.wallet}-overview-v3`}
+              className={`grid min-h-[48px] min-w-[820px] grid-cols-[minmax(160px,1.25fr)_72px_120px_90px_150px_100px] items-center gap-3 text-[13px] ${terminalRowClass}`}
+            >
+              <span
+                className="truncate font-mono text-[color:var(--nova-text-soft)]"
+                title={row.wallet}
+              >
+                {shortInsiderWalletAddress(row.wallet)}
+              </span>
+              <span className="text-center font-mono text-[color:var(--nova-text-muted)]">
+                {row.rank === null ? "N/A" : `#${row.rank}`}
+              </span>
+              <span className="text-center font-medium tabular-nums text-[color:var(--nova-accent-soft)]">
+                {formatInsiderPercent(row.ownershipPercent)}
+              </span>
+              <span className="text-center font-mono tabular-nums text-[color:var(--nova-text)]">
+                {formatInsiderScore(row.score)}
+              </span>
+              <span className="truncate text-center text-[color:var(--nova-text-soft)]">
+                {row.behaviorLabel}
+              </span>
+              <span className="text-center text-[color:var(--nova-text-muted)]">
+                {row.analysisType}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function buildOverviewTop10HolderRows(novaConviction: NovaConvictionResult | null) {
+  const holderAlpha = readRecord(novaConviction?.moduleSummaries?.holderAlpha);
+  const allWalletsByAlphaV3 = readRecordArray(holderAlpha?.allWalletsByAlphaV3);
+  const sourceRows = allWalletsByAlphaV3.length
+    ? allWalletsByAlphaV3
+    : readRecordArray(holderAlpha?.topWalletsByAlphaV3);
+
+  return sourceRows
+    .map((wallet) => {
+      const address = insiderWalletAddress(wallet);
+      const score =
+        numberField(wallet, "walletAlphaV3") ??
+        numberField(wallet, "walletAlphaScore");
+      if (!address || score === null) return null;
+      return {
+        analysisType: insiderAnalysisType(wallet) === "Deep" ? "Deep" : "Light",
+        behaviorLabel: holderAlphaBehaviorLabel(score),
+        rank: numberField(wallet, "holderRank") ?? numberField(wallet, "rank"),
+        score,
+        wallet: address,
+        ownershipPercent:
+          numberField(wallet, "ownershipPercent") ??
+          numberField(wallet, "ownershipPercentage"),
+      };
+    })
+    .filter((row): row is {
+      analysisType: string;
+      behaviorLabel: string;
+      rank: number | null;
+      score: number;
+      wallet: string;
+      ownershipPercent: number | null;
+    } => Boolean(row))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 10);
+}
+
+function OverviewExecutiveScoreCard({
+  inverseTone = false,
+  label,
+  pending,
+  score,
+}: {
+  inverseTone?: boolean;
+  label: string;
+  pending: boolean;
+  score: number | null;
+}) {
+  const displayScore = pending ? "—" : score === null ? "N/A" : formatScoreValue(score);
+  const scoreClass =
+    inverseTone && score !== null && score >= 65
+      ? "text-[color:var(--nova-warning)]"
+      : "text-[color:var(--nova-text)]";
+  const energy = pending || score === null ? 0.34 : Math.max(0.18, Math.min(1, score / 100));
+  const isPrimaryScore = label === "Nova Conviction" || label === "Risk Score";
+  const coreSizeClass = isPrimaryScore ? "h-[5.9rem] w-[5.9rem]" : "h-[4.75rem] w-[4.75rem]";
+
+  return (
+    <div
+      className={`relative overflow-hidden rounded-[1.8rem] ${
+        isPrimaryScore
+          ? `min-h-[102px] ${overviewScoreCardSurfaceClass}`
+          : `min-h-[86px] ${overviewScoreCardSurfaceClass}`
+      } px-4 py-3 backdrop-blur-2xl`}
+    >
+      <div
+        className="pointer-events-none absolute inset-0 rounded-[inherit] bg-[radial-gradient(circle_at_20%_50%,rgba(83,104,120,0.14),rgba(94,114,107,0.05)_34%,transparent_68%)]"
+        style={{
+          animation: `novaScoreCoreBreath ${isPrimaryScore ? 6.6 : 7.6}s ease-in-out infinite`,
+          opacity: isPrimaryScore ? 0.34 : 0.22,
+        }}
+      />
+      <div
+        className="pointer-events-none absolute left-[28%] top-1/2 h-[82%] w-[58%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(ellipse_at_center,rgba(83,104,120,0.08),rgba(94,114,107,0.035)_34%,transparent_70%)] blur-2xl"
+        style={{ opacity: isPrimaryScore ? 0.58 : 0.34 }}
+      />
+      <div
+        className={`pointer-events-none absolute left-[4.4rem] top-1/2 rounded-full ${coreSizeClass}`}
+        style={{
+          filter: `drop-shadow(0 0 ${isPrimaryScore ? 22 : 15}px rgba(83,104,120,${0.04 + energy * 0.1}))`,
+          opacity: 0.76 + energy * 0.2,
+          transform: "translate(-50%, -50%)",
+        }}
+      >
+        <div
+          className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_50%_48%,rgba(237,245,242,0.09),rgba(83,104,120,0.13)_18%,rgba(94,114,107,0.16)_38%,rgba(16,18,19,0.34)_58%,transparent_76%)]"
+          style={{ opacity: 0.42 + energy * 0.28 }}
         />
-      ))}
+        <div className="absolute -inset-[7%] rounded-full border border-[color:rgba(127,144,150,0.08)]" />
+        <div className="absolute inset-0 rounded-full border border-[color:rgba(237,245,242,0.11)]" />
+        <div className="absolute inset-[32%] rounded-full border border-[color:rgba(237,245,242,0.1)] bg-[rgba(10,10,10,0.42)]" />
+        <div
+          className="absolute inset-[13%] animate-[novaScoreSymbolRotate_38s_linear_infinite] rounded-full border border-dashed border-[color:rgba(127,144,150,0.13)]"
+          style={{ opacity: 0.42 + energy * 0.28 }}
+        />
+        <div className="absolute inset-[3%] animate-[novaScoreSymbolRotate_52s_linear_infinite_reverse] rounded-full">
+          <div
+            className="absolute left-1/2 top-0 h-1 w-1 -translate-x-1/2 rounded-full bg-[rgba(237,245,242,0.32)] shadow-[0_0_12px_rgba(127,144,150,0.18)]"
+            style={{ opacity: 0.22 + energy * 0.24 }}
+          />
+          <div className="absolute bottom-4 right-4 h-0.5 w-0.5 rounded-full bg-[rgba(127,144,150,0.24)]" />
+        </div>
+        <div
+          className="absolute inset-[31%] rounded-full bg-[radial-gradient(circle,rgba(237,245,242,0.18),rgba(83,104,120,0.14)_42%,transparent_72%)] blur-[1px]"
+          style={{ opacity: 0.24 + energy * 0.46 }}
+        />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <p className={`relative z-10 font-light tabular-nums tracking-[-0.07em] ${scoreClass} ${isPrimaryScore ? "text-3xl" : "text-2xl"}`}>
+            {displayScore}
+          </p>
+        </div>
+      </div>
+      <div className="relative flex h-full min-h-[inherit] flex-col justify-center pl-[8.6rem] pr-2 text-left">
+        <p className="text-[0.72rem] uppercase tracking-[0.18em] text-[color:var(--nova-text-soft)]">
+          {label}
+        </p>
+      </div>
     </div>
   );
 }
@@ -5684,37 +6968,37 @@ function OverviewScoreOrb({
   score: number | null;
   title: string;
 }) {
-  const displayScore = pending || score === null ? "—" : score;
+  const displayScore = pending ? "—" : score === null ? "N/A" : score;
   const scoreClass =
     inverseTone && score !== null && score >= 65
-      ? "text-amber-100/86"
-      : "text-white/90";
+      ? "text-[color:var(--nova-warning)]"
+      : "text-[color:var(--nova-text)]";
   return (
-    <div className="relative flex min-h-[130px] flex-col items-center justify-center overflow-hidden rounded-[1.5rem] border border-cyan-100/10 bg-black/10 p-3 backdrop-blur-xl">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_42%,rgba(1,44,59,0.34),transparent_64%)]" />
-      <div className="pointer-events-none absolute h-20 w-20 rounded-full bg-cyan-900/18 blur-3xl" />
+    <div className="relative flex min-h-[130px] flex-col items-center justify-center overflow-hidden rounded-[1.5rem] nova-card-inner p-3 backdrop-blur-xl">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_42%,rgba(94,114,107,0.13),transparent_64%)]" />
+      <div className="pointer-events-none absolute h-20 w-20 rounded-full bg-[rgba(83,104,120,0.1)] blur-3xl" />
 
-      <div className="relative flex h-20 w-20 items-center justify-center rounded-full border border-cyan-100/12 bg-[radial-gradient(circle_at_34%_28%,rgba(175,235,255,0.12),rgba(1,44,59,0.42)_42%,rgba(2,4,7,0.92)_76%)] shadow-[0_0_48px_rgba(56,189,248,0.08)]">
+      <div className="relative flex h-20 w-20 items-center justify-center rounded-full border border-[color:var(--nova-border)] bg-[radial-gradient(circle_at_34%_28%,rgba(127,144,150,0.12),rgba(16,18,19,0.68)_42%,rgba(10,10,10,0.94)_76%)] shadow-[0_0_48px_rgba(83,104,120,0.1)]">
         <motion.div
           animate={{ rotate: 360 }}
           transition={{ duration: 24, repeat: Infinity, ease: "linear" }}
           className="absolute inset-0 rounded-full"
         >
-          <div className="absolute inset-3 rounded-full border border-cyan-100/10" />
-          <div className="absolute left-1/2 top-1/2 h-[1px] w-[130%] -translate-x-1/2 -translate-y-1/2 rotate-12 bg-gradient-to-r from-transparent via-cyan-100/16 to-transparent" />
+          <div className="absolute inset-3 rounded-full border border-[color:var(--nova-border)]" />
+          <div className="absolute left-1/2 top-1/2 h-[1px] w-[130%] -translate-x-1/2 -translate-y-1/2 rotate-12 bg-gradient-to-r from-transparent via-[rgba(83,104,120,0.16)] to-transparent" />
         </motion.div>
 
         <div className="relative z-10 text-center">
-          <p className={`text-2xl font-medium tracking-[-0.06em] drop-shadow-[0_0_16px_rgba(180,240,255,0.24)] ${scoreClass}`}>
+          <p className={`text-2xl font-medium tracking-[-0.06em] drop-shadow-[0_0_16px_rgba(83,104,120,0.22)] ${scoreClass}`}>
             {formatScoreValue(displayScore)}
           </p>
         </div>
       </div>
 
-      <p className="relative z-10 mt-2 max-w-[7.5rem] truncate text-center text-[0.68rem] font-light text-white/62">
+      <p className="relative z-10 mt-2 max-w-[7.5rem] truncate text-center text-[0.68rem] font-light text-[color:var(--nova-text-soft)]">
         {title}
       </p>
-      <p className="relative z-10 mt-1 line-clamp-2 max-w-[8.6rem] text-center text-[0.6rem] leading-snug text-white/30">
+      <p className="relative z-10 mt-1 line-clamp-2 max-w-[8.6rem] text-center text-[0.6rem] leading-snug text-[color:var(--nova-text-muted)]">
         {pending ? "Loading" : detail}
       </p>
     </div>
@@ -5725,30 +7009,33 @@ function ExplainableConvictionEnginePanel({
   data,
   error,
   formulaV3,
-  holderIntelligenceSummary,
   insiderRiskV2,
   loadState,
+  novaConviction,
+  token,
+  tokenData,
   tokenFlowSummaryV2,
-  walletReputationSummary,
 }: {
   data: ExplainableConvictionData | null;
   error: string;
   formulaV3: ConvictionFormulaV3Result | null;
-  holderIntelligenceSummary: HolderIntelligenceSummary | null;
   insiderRiskV2: InsiderRiskV2Result;
   loadState: HolderLoadState;
+  novaConviction: NovaConvictionResult | null;
+  token: string;
+  tokenData: TokenResult;
   tokenFlowSummaryV2: TokenFlowSummaryV2 | null;
-  walletReputationSummary: TokenWalletReputationSummary | null;
 }) {
   if (loadState === "loaded" && data) {
     return (
       <NovaConvictionModelView
         data={data}
         formulaV3={formulaV3}
-        holderIntelligenceSummary={holderIntelligenceSummary}
         insiderRiskV2={insiderRiskV2}
+        novaConviction={novaConviction}
+        token={token}
+        tokenData={tokenData}
         tokenFlowSummaryV2={tokenFlowSummaryV2}
-        walletReputationSummary={walletReputationSummary}
       />
     );
   }
@@ -5775,99 +7062,139 @@ function ExplainableConvictionEnginePanel({
 function NovaConvictionModelView({
   data,
   formulaV3,
-  holderIntelligenceSummary,
   insiderRiskV2,
+  novaConviction,
+  token,
+  tokenData,
   tokenFlowSummaryV2,
-  walletReputationSummary,
 }: {
   data: ExplainableConvictionData;
   formulaV3: ConvictionFormulaV3Result | null;
-  holderIntelligenceSummary: HolderIntelligenceSummary | null;
   insiderRiskV2: InsiderRiskV2Result;
+  novaConviction: NovaConvictionResult | null;
+  token: string;
+  tokenData: TokenResult;
   tokenFlowSummaryV2: TokenFlowSummaryV2 | null;
-  walletReputationSummary: TokenWalletReputationSummary | null;
 }) {
   const finalScore = Math.round(
-    formulaV3?.finalConvictionScoreV3 ?? data.finalConvictionScore
-  );
-  const pillarCards = buildNovaConvictionPillars({ data, formulaV3 });
-  const strongestSupport = pillarCards.reduce(
-    (best, pillar) => (!best || pillar.score > best.score ? pillar : best),
-    pillarCards[0]
-  );
-  const mainLimiter = pillarCards.reduce(
-    (weakest, pillar) =>
-      !weakest || pillar.score < weakest.score ? pillar : weakest,
-    pillarCards[0]
+    novaConviction?.novaConvictionScore ??
+      formulaV3?.finalConvictionScoreV3 ??
+      data.finalConvictionScore
   );
   const convictionLabel = novaConvictionLabel(finalScore);
-  const thesis = buildNovaConvictionThesis({
+  const fallbackPillars = buildNovaConvictionPillars({ data, formulaV3 });
+  const fallbackStrongest = fallbackPillars.reduce(
+    (best, pillar) => (!best || pillar.score > best.score ? pillar : best),
+    fallbackPillars[0]
+  );
+  const fallbackLimiter = fallbackPillars.reduce(
+    (weakest, pillar) =>
+      !weakest || pillar.score < weakest.score ? pillar : weakest,
+    fallbackPillars[0]
+  );
+  const thesis =
+    novaConviction?.thesis.summary ||
+    novaConviction?.thesis.finalInterpretation ||
+    buildNovaConvictionThesis({
     finalScore,
-    strongestSupport,
-    mainLimiter,
-  });
-  const pillarAnalyses = buildNovaPillarAnalyses({
+      strongestSupport: fallbackStrongest,
+      mainLimiter: fallbackLimiter,
+    });
+  const researchSections = buildNovaResearchSections({
     data,
     formulaV3,
-    holderIntelligenceSummary,
     insiderRiskV2,
+    novaConviction,
     tokenFlowSummaryV2,
-    walletReputationSummary,
   });
-  const confidenceScore = Math.round(data.dataConfidence.score);
+  const pillarSections = buildNovaTerminalPillars(researchSections);
+  const contributorLists = buildNovaContributorLists({
+    formulaV3,
+    novaConviction,
+    sections: pillarSections,
+  });
+  const strongestSupport = contributorLists.positive[0] ?? {
+    label: fallbackStrongest.label,
+    score: fallbackStrongest.score,
+    note: fallbackStrongest.detail,
+  };
+  const mainLimiter = contributorLists.negative[0] ?? {
+    label: fallbackLimiter.label,
+    score: fallbackLimiter.score,
+    note: fallbackLimiter.detail,
+  };
+  const confidenceScore = Math.round(
+    novaConviction?.scores.dataConfidence ?? data.dataConfidence.score
+  );
   const confidenceContextLabel =
-    data.dataConfidence.label || confidenceScoreLabel(confidenceScore);
+    novaConfidenceLabel(confidenceScore) || data.dataConfidence.label || confidenceScoreLabel(confidenceScore);
+  const tokenLabel = tokenData.symbol || token;
 
   return (
     <div className="space-y-4">
-      <div className="rounded-3xl border border-cyan-100/12 bg-cyan-100/[0.025] p-5 shadow-[0_0_40px_rgba(103,232,249,0.06)]">
-        <div className="grid gap-6 xl:grid-cols-[0.54fr_1.46fr] xl:items-center">
-          <div>
-            <p className="text-[0.64rem] uppercase tracking-[0.22em] text-cyan-100/45">
+      <div className={`rounded-3xl p-5 ${terminalGlassCardClass}`}>
+        <div className="flex flex-col gap-6 xl:flex-row xl:items-center">
+          <div className="min-w-[240px] flex-1">
+            <p className="text-[0.64rem] uppercase tracking-[0.22em] text-[color:var(--nova-accent-soft)]">
               Nova Conviction Model
             </p>
             <div className="mt-4 flex items-end gap-2">
-              <p className="text-7xl font-light tracking-[-0.065em] text-white md:text-8xl">
+              <p className="text-7xl font-light tracking-[-0.065em] text-[color:var(--nova-text)] md:text-8xl">
                 {finalScore}
               </p>
-              <p className="pb-3 text-sm text-white/35">/100</p>
+              <p className="pb-3 text-sm text-[color:var(--nova-text-muted)]">/100</p>
             </div>
-            <p className="mt-3 text-lg font-medium text-cyan-50/78">
+            <p className="mt-3 text-lg font-medium text-[color:var(--nova-text)]">
               {convictionLabel}
             </p>
-            <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/8">
+            <div className="mt-4 h-2 overflow-hidden rounded-full nova-card-inner">
               <div
-                className="h-full rounded-full bg-cyan-100/70 shadow-[0_0_18px_rgba(180,240,255,0.4)]"
+                className="h-full rounded-full bg-[rgba(83,104,120,0.70)] shadow-[0_0_18px_rgba(83,104,120,0.3)]"
                 style={{
                   width: `${normalizeScore(finalScore)}%`,
                 }}
               />
             </div>
           </div>
-          <div className="max-w-3xl xl:pl-2">
-            <p className="text-xs uppercase tracking-[0.18em] text-white/34">
+          <div className="min-w-0 flex-[1.65] xl:px-2">
+            <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">
               Conviction Summary
             </p>
-            <p className="mt-3 text-lg leading-relaxed text-white/74">
+            <p className="mt-3 text-lg leading-relaxed text-[color:var(--nova-text-soft)]">
               {thesis}
             </p>
+          </div>
+          <div className="flex shrink-0 items-center justify-start xl:w-28 xl:justify-end">
+            <TokenAvatar
+              logoUrl={resolveTokenLogo(tokenData)}
+              sizeClass="h-20 w-20 md:h-24 md:w-24"
+              token={tokenLabel}
+            />
+            <div className="ml-3 xl:hidden">
+              <p className="truncate text-sm font-medium text-[color:var(--nova-text)]">
+                {tokenLabel}
+              </p>
+              <p className="mt-0.5 text-xs text-[color:var(--nova-text-muted)]">
+                {chainName(tokenData.chain)}
+              </p>
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
-        <p className="text-xs uppercase tracking-[0.18em] text-white/38">
+      <div className={`rounded-3xl p-4 ${terminalGlassCardClass}`}>
+        <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">
           Why NovaOS reached this conclusion
         </p>
         <div className="mt-4 grid gap-3 lg:grid-cols-3">
           <ConvictionReasonCard
-            detail={pillarReasonDetail(strongestSupport.label, "support")}
+            detail={strongestSupport.note}
             label="Strongest Contributor"
             score={strongestSupport.score}
             title={strongestSupport.label}
           />
           <ConvictionReasonCard
-            detail={pillarReasonDetail(mainLimiter.label, "limit")}
+            detail={mainLimiter.note}
             label="Main Limiter"
             score={mainLimiter.score}
             title={mainLimiter.label}
@@ -5882,20 +7209,592 @@ function NovaConvictionModelView({
         </div>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3">
-        {pillarAnalyses.map((pillar) => (
-          <NovaConvictionPillarAnalysisCard
-            key={pillar.label}
-            pillar={pillar}
-          />
+      <div className="grid gap-3 xl:grid-cols-3">
+        {pillarSections.map((section) => (
+          <NovaConvictionPillarPanel key={section.title} section={section} />
         ))}
       </div>
 
-      <p className="px-1 text-xs leading-relaxed text-white/30">
-        Nova Conviction uses holder quality, structural safety, and market
-        integrity. It does not calculate future price, PnL, win rate, average
-        entry/exit, wallet identity, or financial advice.
+      <p className="px-1 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
+        Nova Conviction explains available evidence only. Unavailable module
+        values are hidden rather than inferred. It does not calculate future
+        price, PnL, win rate, average entry/exit, wallet identity, or financial
+        advice.
       </p>
+    </div>
+  );
+}
+
+type NovaResearchMetric = {
+  barValue?: number | null;
+  label: string;
+  note?: string;
+  tone?: "score" | "risk" | "money" | "count" | "text";
+  value: number | string;
+};
+
+type NovaResearchSection = {
+  description: string;
+  emptyLabel?: string;
+  rows: NovaResearchMetric[];
+  score?: number | null;
+  title: string;
+};
+
+type NovaContributor = {
+  label: string;
+  note: string;
+  score: number;
+};
+
+function buildNovaResearchSections({
+  data,
+  formulaV3,
+  insiderRiskV2,
+  novaConviction,
+  tokenFlowSummaryV2,
+}: {
+  data: ExplainableConvictionData;
+  formulaV3: ConvictionFormulaV3Result | null;
+  insiderRiskV2: InsiderRiskV2Result;
+  novaConviction: NovaConvictionResult | null;
+  tokenFlowSummaryV2: TokenFlowSummaryV2 | null;
+}): NovaResearchSection[] {
+  const holderAlpha = readRecord(novaConviction?.moduleSummaries?.holderAlpha);
+  const smartMoneyFlow = readRecord(novaConviction?.moduleSummaries?.smartMoneyFlow);
+  const riskPressure = readRecord(novaConviction?.moduleSummaries?.riskPressure);
+  const riskStats = readRecord(novaConviction?.moduleSummaries?.riskStats);
+  const scoreBreakdown = readRecord(novaConviction?.scoreBreakdown);
+  const dataConfidenceBreakdown = readRecord(scoreBreakdown?.dataConfidence);
+  const confidenceComponents = readRecord(dataConfidenceBreakdown?.components);
+  const novaBreakdown = readRecord(scoreBreakdown?.novaConviction);
+  const riskSubScores = readRecord(riskPressure?.subScores);
+  const riskMetrics = readRecord(riskPressure?.metrics);
+  const topWallets = readRecordArray(holderAlpha?.topWalletsByAlphaV3);
+  const bottomWallets = readRecordArray(holderAlpha?.bottomWalletsByAlphaV3);
+  const holderWallets = [...topWallets, ...bottomWallets];
+
+  return [
+    {
+      title: "Holder Quality",
+      description:
+        "How Holder Quality was built from Holder Alpha V3 wallet evidence and ownership composition.",
+      score:
+        novaConviction?.scores.holderAlpha ??
+        formulaV3?.pillarScores.holderQualityScore ??
+        null,
+      rows: cleanResearchRows([
+        metricFromAverage("Entry Discipline", holderWallets, "entryDisciplineV3"),
+        metricFromAverage("Exit Discipline", holderWallets, "exitDisciplineV3"),
+        metricFromAverage("Consistency", holderWallets, "consistencyV3"),
+        metricFromAverage("Win Rate Quality", holderWallets, "winRateQualityV3"),
+        metricFromAverage("Rotation Quality", holderWallets, "rotationQualityV3"),
+        metricFromAverage("Risk Hygiene", holderWallets, "riskHygieneV3"),
+        metricFromNumber("Wallet Quality", numberField(holderAlpha, "weightedWalletAlphaV3")),
+        metricFromNumber("Holder Composition", numberField(holderAlpha, "holderCompositionScore")),
+        metricFromNumber("Good Ownership %", numberField(holderAlpha, "goodOrBetterOwnershipPercent"), "percent"),
+        metricFromNumber("Weak Ownership %", numberField(holderAlpha, "weakOrToxicOwnershipPercent"), "percent", "risk"),
+        metricFromNumber("Smart Ownership %", numberField(holderAlpha, "smartLikeOwnershipPercent"), "percent"),
+        metricFromNumber("Data Confidence", numberField(holderAlpha, "confidenceScore")),
+      ]),
+    },
+    {
+      title: "Smart Money",
+      description:
+        "Recent smart-wallet flow and matched wallet participation when the Smart Money module is available.",
+      score: novaConviction?.scores.smartMoneyFlow ?? null,
+      emptyLabel: "Smart Money Flow is unavailable for this scan.",
+      rows: cleanResearchRows([
+        metricFromNumber("Smart Money Score", numberField(smartMoneyFlow, "smartMoneyFlowScore")),
+        metricFromNumber("Recent Smart Wallet Activity", numberField(smartMoneyFlow, "matchedTradeCount"), "count"),
+        metricFromNumber("Buy Pressure", numberField(smartMoneyFlow, "smartMoneyBuyPressure")),
+        metricFromNumber("Sell Pressure", numberField(smartMoneyFlow, "smartMoneySellPressure"), "score", "risk"),
+        metricFromNumber("Net Flow", numberField(smartMoneyFlow, "smartMoneyNetFlowUsd"), "money", "money"),
+        metricFromNumber("Matched Wallet Count", numberField(smartMoneyFlow, "uniqueSmartWallets"), "count"),
+        metricFromSmartWallets(smartMoneyFlow),
+        metricFromNumber("Wallet Flow", tokenFlowSummaryV2 ? overviewWalletFlowScore(tokenFlowSummaryV2) : null),
+      ]),
+    },
+    {
+      title: "Risk Analysis",
+      description:
+        "Risk internals from Risk Pressure, ownership exposure, market pressure, and behavioral uncertainty.",
+      score: novaConviction?.risk.riskScore ?? insiderRiskV2.insiderRiskScore,
+      rows: cleanResearchRows([
+        metricFromNumber("Risk Pressure", novaConviction?.scores.riskPressure ?? numberField(riskPressure, "riskPressureScore"), "score", "risk"),
+        metricFromNumber("Weak Holder Pressure", numberField(riskSubScores, "weakHolderRiskScore"), "score", "risk"),
+        metricFromNumber("Concentration Risk", numberField(riskSubScores, "top10ConcentrationRiskScore") ?? insiderRiskV2.concentrationPressureScore, "score", "risk"),
+        metricFromNumber("Phishing Exposure", numberField(riskSubScores, "phishingRiskScore"), "score", "risk"),
+        metricFromNumber("Bundler Exposure", numberField(riskSubScores, "bundlerRiskScore") ?? insiderRiskV2.bundleStructureScore, "score", "risk"),
+        metricFromNumber("Sniper Exposure", numberField(riskSubScores, "sniperRiskScore"), "score", "risk"),
+        metricFromNumber("Fresh Wallet Exposure", numberField(riskSubScores, "freshWalletRiskScore"), "score", "risk"),
+        metricFromNumber("Market Pressure", numberField(riskPressure, "marketRiskScore"), "score", "risk"),
+        metricFromNumber("Sell Pressure", numberField(riskSubScores, "sellPressureRiskScore") ?? numberField(riskMetrics, "sellPressure"), "score", "risk"),
+        metricFromNumber("Behavioral Risk", numberField(riskPressure, "behavioralRiskScore"), "score", "risk"),
+        metricFromNumber("Data Uncertainty", numberField(riskPressure, "confidenceRiskScore"), "score", "risk"),
+      ]),
+    },
+    {
+      title: "Liquidity Health",
+      description:
+        "Liquidity, volume, market size, and trading activity inputs used to judge market durability.",
+      score: novaConviction?.scores.liquidityHealth ?? data.subScores.liquidityTrust,
+      rows: cleanResearchRows([
+        metricFromNumber("Liquidity Health", novaConviction?.scores.liquidityHealth ?? data.subScores.liquidityTrust),
+        metricFromNumber("Liquidity", numberField(riskStats, "liquidityUsd") ?? numberField(riskMetrics, "liquidityUsd"), "money", "money"),
+        metricFromNumber("Volume", numberField(riskStats, "volume24h") ?? numberField(riskMetrics, "volume24h"), "money", "money"),
+        metricFromNumber("Volume / Liquidity Ratio", numberField(riskMetrics, "volumeLiquidityRatio"), "ratio"),
+        metricFromNumber("Market Cap", numberField(riskStats, "marketCap") ?? numberField(riskMetrics, "marketCapApprox"), "money", "money"),
+        metricFromNumber("Trading Activity", data.subScores.marketMomentum),
+        metricFromNumber("Liquidity Trust", data.subScores.liquidityTrust),
+      ]),
+    },
+    {
+      title: "Data Confidence",
+      description:
+        "Coverage, wallet depth, failed wallet count, and confidence modifiers behind the final confidence reading.",
+      score: novaConviction?.scores.dataConfidence ?? data.dataConfidence.score,
+      rows: cleanResearchRows([
+        metricFromNumber("Coverage", numberField(confidenceComponents, "coverage") ?? data.aggregation.dataCoverage),
+        metricFromNumber("Wallet Coverage", numberField(confidenceComponents, "holderAlpha") ?? numberField(holderAlpha, "holderSetCoverageScore")),
+        metricFromNumber("Deep Wallet Count", numberField(holderAlpha, "deepAnalyzedWalletCount"), "count"),
+        metricFromNumber("Light Wallet Count", numberField(holderAlpha, "lightAnalyzedWalletCount"), "count"),
+        metricFromNumber("Failed Wallet Count", numberField(holderAlpha, "failedWalletCount"), "count", "risk"),
+        metricFromNumber("Confidence Modifier", numberField(novaBreakdown, "confidenceModifier"), "ratio"),
+        metricFromNumber("Final Data Confidence", novaConviction?.scores.dataConfidence ?? data.dataConfidence.score),
+        metricFromText("Confidence Label", novaConfidenceLabel(novaConviction?.scores.dataConfidence ?? data.dataConfidence.score)),
+      ]),
+    },
+  ];
+}
+
+function buildNovaTerminalPillars(sections: NovaResearchSection[]) {
+  const holder = sections.find((section) => section.title === "Holder Quality");
+  const risk = sections.find((section) => section.title === "Risk Analysis");
+  const liquidity = sections.find((section) => section.title === "Liquidity Health");
+  const confidence = sections.find((section) => section.title === "Data Confidence");
+
+  return [
+    {
+      title: "Holder Quality",
+      description: "Holder Alpha V3 quality and ownership composition.",
+      score: holder?.score ?? null,
+      rows: holder?.rows ?? [],
+    },
+    {
+      title: "Risk Analysis",
+      description: "Risk pressure, exposure, concentration, and uncertainty.",
+      score: risk?.score ?? null,
+      rows:
+        risk?.rows.filter((row) =>
+          [
+            "Weak Holder Pressure",
+            "Phishing Exposure",
+            "Bundler Exposure",
+            "Sniper Exposure",
+            "Fresh Wallet Exposure",
+            "Market Pressure",
+            "Sell Pressure",
+            "Behavioral Risk",
+            "Data Uncertainty",
+            "Concentration Risk",
+          ].includes(row.label)
+        ) ?? [],
+    },
+    {
+      title: "Market Health",
+      description: "Liquidity health, market activity, and usable data coverage.",
+      score: liquidity?.score ?? null,
+      rows: [
+        ...(liquidity?.rows.filter((row) =>
+          [
+            "Liquidity",
+            "Volume",
+            "Volume / Liquidity Ratio",
+            "Trading Activity",
+            "Market Cap",
+            "Liquidity Trust",
+          ].includes(row.label)
+        ) ?? []),
+        ...(confidence?.rows.filter((row) =>
+          [
+            "Final Data Confidence",
+            "Coverage",
+            "Wallet Coverage",
+            "Confidence Modifier",
+          ].includes(row.label)
+        ).map((row) =>
+          row.label === "Final Data Confidence"
+            ? { ...row, label: "Data Confidence" }
+            : row
+        ) ?? []),
+      ],
+    },
+  ] satisfies NovaResearchSection[];
+}
+
+function cleanResearchRows(rows: Array<NovaResearchMetric | null>) {
+  return rows.filter((row): row is NovaResearchMetric => Boolean(row));
+}
+
+function readRecordArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.map(readRecord).filter((item): item is Record<string, unknown> => Boolean(item))
+    : [];
+}
+
+function numberField(record: Record<string, unknown> | null | undefined, key: string) {
+  return readFiniteNumber(record?.[key]);
+}
+
+function metricFromNumber(
+  label: string,
+  value: number | null | undefined,
+  format: "score" | "percent" | "money" | "count" | "ratio" = "score",
+  tone: NovaResearchMetric["tone"] = format === "money" ? "money" : "score"
+): NovaResearchMetric | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const display =
+    format === "money"
+      ? formatUsd(value)
+      : format === "percent"
+      ? `${Number(value.toFixed(2))}%`
+      : format === "ratio"
+      ? Number(value.toFixed(3)).toString()
+      : format === "count"
+      ? String(Math.round(value))
+      : formatScoreValue(value);
+  return {
+    barValue: metricBarValue(value, format),
+    label,
+    tone,
+    value: display,
+  };
+}
+
+function metricBarValue(
+  value: number,
+  format: "score" | "percent" | "money" | "count" | "ratio"
+) {
+  if (!Number.isFinite(value)) return null;
+  if (format === "money") {
+    return Math.max(0, Math.min(100, Math.log10(Math.max(value, 0) + 1) * 10));
+  }
+  if (format === "ratio") {
+    return Math.max(0, Math.min(100, value * 100));
+  }
+  return Math.max(0, Math.min(100, value));
+}
+
+function metricFromText(label: string, value: string | null | undefined): NovaResearchMetric | null {
+  return value ? { label, tone: "text", value } : null;
+}
+
+function metricFromAverage(
+  label: string,
+  rows: Array<Record<string, unknown>>,
+  key: string
+): NovaResearchMetric | null {
+  const values = rows
+    .map((row) => numberField(row, key))
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (!values.length) return null;
+  const average = values.reduce((total, value) => total + value, 0) / values.length;
+  return metricFromNumber(label, average);
+}
+
+function metricFromSmartWallets(record: Record<string, unknown> | null): NovaResearchMetric | null {
+  const wallets = readRecordArray(record?.topSmartWallets);
+  if (!wallets.length) return null;
+  const labels = wallets
+    .slice(0, 3)
+    .map((wallet) =>
+      String(wallet.walletName || wallet.twitterUsername || wallet.wallet || "Smart wallet")
+    );
+  return { label: "Recent Smart Wallets", tone: "text", value: labels.join(", ") };
+}
+
+function NovaConvictionPillarPanel({ section }: { section: NovaResearchSection }) {
+  const score = typeof section.score === "number" && Number.isFinite(section.score)
+    ? normalizeScore(section.score)
+    : null;
+
+  return (
+    <section className={`flex min-h-[520px] flex-col rounded-3xl p-4 ${terminalGlassCardClass}`}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-accent-soft)]">
+            {section.title}
+          </p>
+          <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
+            {section.description}
+          </p>
+        </div>
+        <p className="font-mono text-5xl font-semibold tabular-nums tracking-[-0.07em] text-[color:var(--nova-text)]">
+          {score === null ? "N/A" : score}
+        </p>
+      </div>
+
+      <MetricBar value={score} className="mt-4 h-2" tone={section.title === "Risk Analysis" ? "risk" : "score"} />
+
+      <div className="mt-4 flex-1 space-y-2.5">
+        {section.rows.length ? (
+          section.rows.map((row) => (
+            <NovaPillarMetricRow
+              key={`${section.title}-${row.label}`}
+              row={row}
+              tone={section.title === "Risk Analysis" ? "risk" : row.tone}
+            />
+          ))
+        ) : (
+          <div className={`flex h-full min-h-[220px] items-center justify-center rounded-2xl px-5 text-center text-xs text-[color:var(--nova-text-muted)] ${terminalGlassCardClass}`}>
+            No supported metrics returned for this pillar.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function NovaPillarMetricRow({
+  row,
+  tone,
+}: {
+  row: NovaResearchMetric;
+  tone?: NovaResearchMetric["tone"];
+}) {
+  const barValue =
+    typeof row.barValue === "number" && Number.isFinite(row.barValue)
+      ? row.barValue
+      : typeof row.value === "number"
+      ? row.value
+      : null;
+  const valueClass =
+    tone === "risk" || row.tone === "risk"
+      ? "text-[color:var(--nova-warning)]"
+      : "text-[color:var(--nova-text-soft)]";
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3">
+        <p className="truncate text-xs text-[color:var(--nova-text-soft)]">{row.label}</p>
+        <p className={`shrink-0 font-mono text-xs tabular-nums ${valueClass}`}>{row.value}</p>
+      </div>
+      <MetricBar value={barValue} className="mt-1.5 h-1" tone={tone === "risk" || row.tone === "risk" ? "risk" : "score"} />
+    </div>
+  );
+}
+
+function MetricBar({
+  className = "",
+  tone = "score",
+  value,
+}: {
+  className?: string;
+  tone?: "score" | "risk";
+  value: number | null;
+}) {
+  const width = typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.min(100, value))
+    : 0;
+
+  return (
+    <div className={`overflow-hidden rounded-full bg-[rgba(83,104,120,0.1)] ${className}`}>
+      <div
+        className={`h-full rounded-full ${
+          tone === "risk"
+            ? "bg-[var(--nova-slate)] shadow-[0_0_14px_rgba(83,104,120,0.16)]"
+            : "bg-[rgba(127,144,150,0.72)] shadow-[0_0_14px_rgba(83,104,120,0.18)]"
+        }`}
+        style={{ width: `${width}%` }}
+      />
+    </div>
+  );
+}
+
+function buildNovaContributorLists({
+  formulaV3,
+  novaConviction,
+  sections,
+}: {
+  formulaV3: ConvictionFormulaV3Result | null;
+  novaConviction: NovaConvictionResult | null;
+  sections: NovaResearchSection[];
+}) {
+  const positive: NovaContributor[] = [];
+  const negative: NovaContributor[] = [];
+
+  for (const section of sections) {
+    if (typeof section.score !== "number" || !Number.isFinite(section.score)) continue;
+    if (section.score >= 58) {
+      positive.push({
+        label: section.title,
+        note: `${section.title} is supportive at ${formatScoreValue(section.score)}/100.`,
+        score: section.score,
+      });
+    }
+    if (section.title === "Risk Analysis" || section.score < 50) {
+      negative.push({
+        label: section.title === "Risk Analysis" ? "Risk Pressure" : section.title,
+        note:
+          section.title === "Risk Analysis"
+            ? `Risk score is ${formatScoreValue(section.score)}/100.`
+            : `${section.title} limits conviction at ${formatScoreValue(section.score)}/100.`,
+        score: section.title === "Risk Analysis" ? section.score : 100 - section.score,
+      });
+    }
+  }
+
+  for (const item of formulaV3?.positiveDrivers ?? []) {
+    positive.push({ label: item, note: "Formula V3 positive driver.", score: 60 });
+  }
+  for (const item of novaConviction?.thesis.bullishPoints ?? []) {
+    positive.push({ label: item, note: "Nova thesis positive driver.", score: 60 });
+  }
+  for (const item of formulaV3?.negativeDrivers ?? []) {
+    negative.push({ label: item, note: "Formula V3 negative driver.", score: 60 });
+  }
+  for (const item of novaConviction?.risk.riskDrivers ?? []) {
+    negative.push({ label: item, note: "Nova risk driver.", score: 70 });
+  }
+  for (const item of novaConviction?.thesis.bearishPoints ?? []) {
+    negative.push({ label: item, note: "Nova thesis negative driver.", score: 60 });
+  }
+
+  return {
+    positive: uniqueContributors(positive).sort((a, b) => b.score - a.score).slice(0, 6),
+    negative: uniqueContributors(negative).sort((a, b) => b.score - a.score).slice(0, 6),
+  };
+}
+
+function uniqueContributors(items: NovaContributor[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = item.label.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function NovaResearchSectionCard({ section }: { section: NovaResearchSection }) {
+  return (
+    <section className={`rounded-3xl p-4 ${terminalGlassCardClass}`}>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">
+            {section.title}
+          </p>
+          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-[color:var(--nova-text-soft)]">
+            {section.description}
+          </p>
+        </div>
+        {typeof section.score === "number" && Number.isFinite(section.score) && (
+          <div className="text-right">
+            <p className="font-mono text-4xl font-semibold tabular-nums tracking-[-0.06em] text-[color:var(--nova-text)]">
+              {formatScoreValue(section.score)}
+            </p>
+            <p className="text-[10px] uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
+              Score
+            </p>
+          </div>
+        )}
+      </div>
+
+      {section.rows.length ? (
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {section.rows.map((row) => (
+            <NovaResearchMetricCard key={row.label} row={row} />
+          ))}
+        </div>
+      ) : (
+        <TerminalStatePanel
+          detail={section.emptyLabel || "This module did not return supported fields for this scan."}
+          title="Unavailable"
+        />
+      )}
+    </section>
+  );
+}
+
+function NovaResearchMetricCard({ row }: { row: NovaResearchMetric }) {
+  const toneClass =
+    row.tone === "risk"
+      ? "text-[color:var(--nova-warning)]"
+      : row.tone === "money"
+      ? "text-[color:var(--nova-accent-soft)]"
+      : "text-[color:var(--nova-text)]";
+
+  return (
+    <div className={`rounded-2xl p-3 ${terminalGlassCardClass}`}>
+      <p className="text-[0.62rem] uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
+        {row.label}
+      </p>
+      <p className={`mt-2 truncate font-mono text-lg font-semibold tabular-nums ${toneClass}`}>
+        {row.value}
+      </p>
+      {row.note && (
+        <p className="mt-1 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">{row.note}</p>
+      )}
+    </div>
+  );
+}
+
+function NovaTopContributorsPanel({
+  lists,
+}: {
+  lists: { positive: NovaContributor[]; negative: NovaContributor[] };
+}) {
+  return (
+    <section className={`rounded-3xl p-4 ${terminalGlassCardClass}`}>
+      <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">
+        Top Contributors
+      </p>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <NovaContributorList title="Most Positive Drivers" items={lists.positive} />
+        <NovaContributorList title="Most Negative Drivers" items={lists.negative} tone="risk" />
+      </div>
+    </section>
+  );
+}
+
+function NovaContributorList({
+  items,
+  title,
+  tone = "default",
+}: {
+  items: NovaContributor[];
+  title: string;
+  tone?: "default" | "risk";
+}) {
+  return (
+    <div className={`rounded-2xl p-3 ${terminalGlassCardClass}`}>
+      <p className="text-[0.62rem] uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
+        {title}
+      </p>
+      <div className="mt-3 space-y-2">
+        {items.length ? (
+          items.map((item, index) => (
+            <div key={`${item.label}-${index}`} className="flex gap-3">
+              <span
+                className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] ${
+                  tone === "risk"
+                    ? "border-[color:var(--nova-border)] text-[color:var(--nova-warning)]"
+                    : "border-[color:var(--nova-border)] text-[color:var(--nova-accent-soft)]"
+                }`}
+              >
+                {index + 1}
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-[color:var(--nova-text-soft)]">{item.label}</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">{item.note}</p>
+              </div>
+            </div>
+          ))
+        ) : (
+          <p className="text-xs text-[color:var(--nova-text-muted)]">Unavailable</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -6098,21 +7997,21 @@ function ConvictionReasonCard({
 }) {
   const toneClass =
     tone === "risk"
-      ? "border-amber-100/12 bg-amber-100/[0.03]"
-      : "border-cyan-100/12 bg-cyan-100/[0.03]";
+      ? terminalGlassCardClass
+      : terminalGlassCardClass;
 
   return (
-    <div className={`rounded-2xl border p-3 ${toneClass}`}>
-      <p className="text-[0.64rem] uppercase tracking-[0.16em] text-white/34">
+    <div className={`rounded-2xl p-3 ${toneClass}`}>
+      <p className="text-[0.64rem] uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
         {label}
       </p>
       <div className="mt-2 flex items-baseline justify-between gap-3">
-        <p className="text-sm font-medium text-white/78">{title}</p>
-        <p className="font-mono text-xl font-semibold tabular-nums text-white/82">
+        <p className="text-sm font-medium text-[color:var(--nova-text)]">{title}</p>
+        <p className="font-mono text-xl font-semibold tabular-nums text-[color:var(--nova-text)]">
           {formatScoreValue(score)}
         </p>
       </div>
-      <p className="mt-2 text-xs leading-relaxed text-white/40">{detail}</p>
+      <p className="mt-2 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">{detail}</p>
     </div>
   );
 }
@@ -6246,7 +8145,7 @@ function buildNovaPillarAnalyses({
           note: walletFlowScore !== null ? scoreLabel(walletFlowScore) : "Unavailable",
         },
         {
-          label: "Accumulation Pressure",
+          label: "Holder Support",
           score: tokenFlowSummaryV2?.accumulationPressure ?? null,
           note:
             typeof tokenFlowSummaryV2?.accumulationPressure === "number"
@@ -6254,7 +8153,7 @@ function buildNovaPillarAnalyses({
               : "Unavailable",
         },
         {
-          label: "Distribution Pressure",
+          label: "Holder Risk",
           score: tokenFlowSummaryV2?.distributionPressure ?? null,
           note:
             typeof tokenFlowSummaryV2?.distributionPressure === "number"
@@ -6302,27 +8201,27 @@ function NovaConvictionPillarAnalysisCard({
   pillar: NovaPillarAnalysis;
 }) {
   return (
-    <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
+    <div className="rounded-3xl nova-card-inner p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs uppercase tracking-[0.16em] text-white/38">
+          <p className="text-xs uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
             {pillar.label}
           </p>
-          <p className="mt-2 text-xs leading-relaxed text-white/38">
+          <p className="mt-2 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
             {pillar.detail}
           </p>
         </div>
-        <p className="font-mono text-3xl font-semibold tabular-nums tracking-[-0.05em] text-white/84">
+        <p className="font-mono text-3xl font-semibold tabular-nums tracking-[-0.05em] text-[color:var(--nova-text)]">
           {formatScoreValue(pillar.score)}
         </p>
       </div>
-      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/8">
+      <div className="mt-4 h-1.5 overflow-hidden rounded-full nova-card-inner">
         <div
-          className="h-full rounded-full bg-cyan-100/68 shadow-[0_0_16px_rgba(180,240,255,0.24)]"
+          className="h-full rounded-full bg-[rgba(83,104,120,0.68)] shadow-[0_0_16px_rgba(83,104,120,0.22)]"
           style={{ width: `${normalizeScore(pillar.score)}%` }}
         />
       </div>
-      <p className="mt-3 text-xs leading-relaxed text-white/42">
+      <p className="mt-3 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
         {pillar.interpretation}
       </p>
       <div className="mt-4 space-y-3">
@@ -6339,27 +8238,27 @@ function NovaPillarSubScoreRow({ row }: { row: NovaPillarSubScore }) {
   const width = hasScore ? normalizeScore(row.score as number) : 0;
   const barClass =
     row.tone === "pressure"
-      ? "bg-amber-100/62 shadow-[0_0_14px_rgba(253,230,138,0.18)]"
-      : "bg-cyan-100/62 shadow-[0_0_14px_rgba(180,240,255,0.18)]";
+      ? "bg-[rgba(83,104,120,0.48)] shadow-[0_0_14px_rgba(83,104,120,0.18)]"
+      : "bg-[rgba(83,104,120,0.62)] shadow-[0_0_14px_rgba(83,104,120,0.18)]";
 
   return (
     <div>
       <div className="flex items-baseline justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-xs text-white/58">{row.label}</p>
-          <p className="mt-0.5 text-[0.66rem] text-white/28">
+          <p className="truncate text-xs text-[color:var(--nova-text-soft)]">{row.label}</p>
+          <p className="mt-0.5 text-[0.66rem] text-[color:var(--nova-text-muted)]">
             {row.note || (hasScore ? scoreLabel(row.score as number) : "Unavailable")}
           </p>
         </div>
         <p
           className={`font-mono text-sm tabular-nums ${
-            hasScore ? "text-white/66" : "text-white/24"
+            hasScore ? "text-[color:var(--nova-text-soft)]" : "text-[color:var(--nova-text-muted)]"
           }`}
         >
           {hasScore ? formatScoreValue(row.score as number) : "Unavailable"}
         </p>
       </div>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/8">
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full nova-card-inner">
         <div
           className={`h-full rounded-full ${barClass}`}
           style={{ width: `${width}%` }}
@@ -6382,20 +8281,20 @@ function HolderIntelligenceMatrixPanel({
   const highestRisk = summary?.highestRiskHolder;
 
   return (
-    <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
+    <div className="rounded-3xl nova-card-inner p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-xs uppercase tracking-[0.18em] text-cyan-100/44">
+          <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-accent)]">
             Holder Intelligence Matrix V2
           </p>
-          <p className="mt-2 max-w-3xl text-xs leading-relaxed text-white/36">
+          <p className="mt-2 max-w-3xl text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
             Holder Intelligence uses available holder metadata, profile behavior,
             relationship evidence, deep behavior and wallet reputation. It does
             not calculate PnL, win rate, average entry, average exit, smart money
             identity, insider identity, or unavailable wallet history.
           </p>
         </div>
-        <span className="rounded-full border border-white/10 bg-white/[0.025] px-3 py-1 text-xs text-white/42">
+        <span className="rounded-full nova-card-inner px-3 py-1 text-xs text-[color:var(--nova-text-soft)]">
           Formula V2 foundation
         </span>
       </div>
@@ -6434,14 +8333,14 @@ function HolderIntelligenceMatrixPanel({
           </div>
 
           <div className="mt-4 grid gap-3 xl:grid-cols-[0.95fr_1.05fr]">
-            <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-3">
-              <p className="text-xs uppercase tracking-[0.18em] text-white/36">
+            <div className="rounded-2xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner p-3">
+              <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">
                 Summary Verdict
               </p>
-              <p className="mt-2 text-sm font-medium text-cyan-50/72">
+              <p className="mt-2 text-sm font-medium text-[color:var(--nova-text)]">
                 {summary.summaryVerdict}
               </p>
-              <p className="mt-2 text-xs leading-relaxed text-white/34">
+              <p className="mt-2 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
                 Average conviction contribution is{" "}
                 {summary.averageConvictionContribution}/100. Average structural
                 risk contribution is {summary.averageRiskContribution}/100.
@@ -6478,8 +8377,8 @@ function HolderIntelligenceMatrixPanel({
           )}
 
           {!compact && matrix.length > 0 && (
-            <div className="mt-4 overflow-x-auto rounded-2xl border border-white/8 bg-black/18">
-              <div className="grid min-w-[880px] grid-cols-[1.05fr_1fr_0.8fr_0.8fr_0.8fr] gap-3 border-b border-white/8 px-4 py-3 text-[10px] uppercase tracking-[0.14em] text-white/34">
+            <div className="mt-4 overflow-x-auto rounded-2xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner">
+              <div className="grid min-w-[880px] grid-cols-[1.05fr_1fr_0.8fr_0.8fr_0.8fr] gap-3 border-b border-[color:rgba(83,104,120,0.14)] px-4 py-3 text-[10px] uppercase tracking-[0.14em] text-[color:var(--nova-text-muted)]">
                 <span>Holder</span>
                 <span>Class</span>
                 <span className="text-center">Contribution</span>
@@ -6489,22 +8388,22 @@ function HolderIntelligenceMatrixPanel({
               {matrix.slice(0, 8).map((holder) => (
                 <div
                   key={`${holder.holderRank || "holder"}-${holder.walletAddress}`}
-                  className="grid min-h-[56px] min-w-[880px] grid-cols-[1.05fr_1fr_0.8fr_0.8fr_0.8fr] items-center gap-3 border-b border-white/[0.055] px-4 py-3 text-xs"
+                  className="grid min-h-[56px] min-w-[880px] grid-cols-[1.05fr_1fr_0.8fr_0.8fr_0.8fr] items-center gap-3 border-b border-[color:rgba(83,104,120,0.12)] px-4 py-3 text-xs"
                 >
                   <div className="min-w-0">
-                    <p className="truncate font-mono text-white/70">
+                    <p className="truncate font-mono text-[color:var(--nova-text-soft)]">
                       {holder.shortAddress}
                     </p>
-                    <p className="mt-0.5 text-[11px] text-white/30">
+                    <p className="mt-0.5 text-[11px] text-[color:var(--nova-text-muted)]">
                       {holder.confidenceLabel} confidence
                     </p>
                   </div>
-                  <span className="truncate text-white/58">{holder.holderClass}</span>
-                  <span className="text-center text-white/58">
+                  <span className="truncate text-[color:var(--nova-text-soft)]">{holder.holderClass}</span>
+                  <span className="text-center text-[color:var(--nova-text-soft)]">
                     {holder.contributionTier}
                   </span>
-                  <span className="text-center text-white/58">{holder.riskTier}</span>
-                  <span className="text-center font-medium tabular-nums text-cyan-100/72">
+                  <span className="text-center text-[color:var(--nova-text-soft)]">{holder.riskTier}</span>
+                  <span className="text-center font-medium tabular-nums text-[color:var(--nova-accent)]">
                     {holder.overallHolderScore}
                   </span>
                 </div>
@@ -6527,16 +8426,16 @@ function HolderIntelligenceMiniCard({
   tone?: "support" | "risk";
 }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/18 p-3">
-      <p className="text-xs uppercase tracking-[0.18em] text-white/36">{label}</p>
+    <div className="rounded-2xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner p-3">
+      <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">{label}</p>
       <p
         className={`mt-2 truncate text-sm font-medium ${
-          tone === "risk" ? "text-amber-100/70" : "text-cyan-50/72"
+          tone === "risk" ? "text-[color:var(--nova-warning)]" : "text-[color:var(--nova-text)]"
         }`}
       >
         {holder ? holder.shortAddress : "Unavailable"}
       </p>
-      <p className="mt-1 text-xs leading-relaxed text-white/34">
+      <p className="mt-1 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
         {holder
           ? `${holder.holderClass} · ${holder.overallHolderScore}/100 · ${holder.contributionTier}`
           : "No holder matrix evidence loaded yet."}
@@ -6553,17 +8452,17 @@ function HolderMatrixDriverList({
   title: string;
 }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/18 p-3">
-      <p className="text-xs uppercase tracking-[0.18em] text-white/36">{title}</p>
+    <div className="rounded-2xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner p-3">
+      <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">{title}</p>
       <div className="mt-3 space-y-2">
         {items.length ? (
           items.map((item) => (
-            <p key={item} className="text-xs leading-relaxed text-white/38">
+            <p key={item} className="text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
               {item}
             </p>
           ))
         ) : (
-          <p className="text-xs text-white/28">Unavailable</p>
+          <p className="text-xs text-[color:var(--nova-text-muted)]">Unavailable</p>
         )}
       </div>
     </div>
@@ -6579,22 +8478,22 @@ function InsiderRiskV2Panel({ result }: { result: InsiderRiskV2Result }) {
   ] as const;
 
   return (
-    <section className="rounded-[2rem] border border-amber-100/12 bg-amber-100/[0.025] p-5">
+    <section className="rounded-[2rem] border border-[color:var(--nova-border)] bg-[rgba(83,104,120,0.05)] p-5">
       <div className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr] xl:items-start">
         <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-amber-100/44">
+          <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--nova-warning)]">
             Insider Risk
           </p>
           <div className="mt-4 flex items-end gap-2">
-            <p className="text-6xl font-light tracking-[-0.065em] text-white">
+            <p className="text-6xl font-light tracking-[-0.065em] text-[color:var(--nova-text)]">
               {result.insiderRiskScore}
             </p>
-            <p className="pb-2 text-sm text-white/36">/100</p>
+            <p className="pb-2 text-sm text-[color:var(--nova-text-muted)]">/100</p>
           </div>
-          <p className="mt-3 text-lg font-medium text-amber-50/78">
+          <p className="mt-3 text-lg font-medium text-[color:var(--nova-warning)]">
             {result.riskTier} structural risk
           </p>
-          <p className="mt-3 text-sm leading-relaxed text-white/48">
+          <p className="mt-3 text-sm leading-relaxed text-[color:var(--nova-text-soft)]">
             {result.verdict}
           </p>
         </div>
@@ -6625,17 +8524,17 @@ function InsiderRiskV2Panel({ result }: { result: InsiderRiskV2Result }) {
 
 function InsiderV2List({ items, title }: { items: string[]; title: string }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/18 p-3">
-      <p className="text-xs uppercase tracking-[0.18em] text-white/36">{title}</p>
+    <div className="rounded-2xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner p-3">
+      <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">{title}</p>
       <div className="mt-3 space-y-2">
         {items.length ? (
           items.slice(0, 5).map((item) => (
-            <p key={item} className="text-xs leading-relaxed text-white/40">
+            <p key={item} className="text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
               {item}
             </p>
           ))
         ) : (
-          <p className="text-xs text-white/28">Unavailable</p>
+          <p className="text-xs text-[color:var(--nova-text-muted)]">Unavailable</p>
         )}
       </div>
     </div>
@@ -6652,16 +8551,16 @@ function WalletReputationMiniCard({
   wallet?: WalletReputationResult;
 }) {
   return (
-    <div className="rounded-2xl border border-white/8 bg-black/18 p-3">
-      <p className="text-xs uppercase tracking-[0.18em] text-white/36">{label}</p>
+    <div className="rounded-2xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner p-3">
+      <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">{label}</p>
       <p
         className={`mt-2 truncate text-sm font-medium ${
-          tone === "risk" ? "text-amber-100/70" : "text-cyan-50/72"
+          tone === "risk" ? "text-[color:var(--nova-warning)]" : "text-[color:var(--nova-text)]"
         }`}
       >
         {wallet ? shortInsiderWalletAddress(wallet.walletAddress) : "Unavailable"}
       </p>
-      <p className="mt-1 text-xs text-white/34">
+      <p className="mt-1 text-xs text-[color:var(--nova-text-muted)]">
         {wallet
           ? `${wallet.walletClass} · ${wallet.reputationScore}/100 · ${wallet.confidence} confidence`
           : "No wallet evidence loaded yet."}
@@ -6694,29 +8593,29 @@ function FormulaValidationLogPanel({
   const lastSaved = snapshots[0]?.analyzedAt;
 
   return (
-    <details className="rounded-3xl border border-white/10 bg-black/20 p-4">
+    <details className="rounded-3xl nova-card-inner p-4">
       <summary className="cursor-pointer list-none">
         <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <p className="text-xs uppercase tracking-[0.18em] text-white/38">
+            <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">
               Validation lab
             </p>
-            <h3 className="mt-2 text-lg font-semibold tracking-[-0.035em] text-white/86">
+            <h3 className="mt-2 text-lg font-semibold tracking-[-0.035em] text-[color:var(--nova-text)]">
               Formula Validation Log
             </h3>
-            <p className="mt-2 max-w-3xl text-xs leading-relaxed text-white/38">
+            <p className="mt-2 max-w-3xl text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
               Internal local-only testing log for V1, V2 and V3.
             </p>
           </div>
-          <span className="rounded-full border border-white/10 bg-white/[0.025] px-3 py-1 text-xs text-white/42">
+          <span className="rounded-full nova-card-inner px-3 py-1 text-xs text-[color:var(--nova-text-soft)]">
             {snapshots.length} saved
           </span>
         </div>
       </summary>
 
-      <div className="mt-4 border-t border-white/10 pt-4">
+      <div className="mt-4 border-t border-[color:var(--nova-border)] pt-4">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <p className="max-w-3xl text-xs leading-relaxed text-white/34">
+        <p className="max-w-3xl text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
           Outcomes are manually labeled and stored locally. NovaOS does not
           auto-detect future performance or fabricate results.
         </p>
@@ -6727,8 +8626,8 @@ function FormulaValidationLogPanel({
             disabled={!canSave}
             className={`rounded-full border px-3 py-1.5 text-xs transition ${
               canSave
-                ? "border-cyan-100/14 bg-cyan-100/[0.045] text-cyan-100/70 hover:bg-cyan-100/[0.075]"
-                : "cursor-not-allowed border-white/8 bg-white/[0.02] text-white/24"
+                ? "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-accent)] hover:nova-card-inner"
+                : "cursor-not-allowed border-[color:rgba(83,104,120,0.14)] nova-card-inner text-[color:var(--nova-text-muted)]"
             }`}
           >
             Save validation snapshot
@@ -6739,8 +8638,8 @@ function FormulaValidationLogPanel({
             disabled={!snapshots.length}
             className={`rounded-full border px-3 py-1.5 text-xs transition ${
               snapshots.length
-                ? "border-white/10 bg-white/[0.025] text-white/38 hover:bg-white/[0.05]"
-                : "cursor-not-allowed border-white/8 bg-white/[0.02] text-white/22"
+                ? "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-muted)] hover:nova-card-inner"
+                : "cursor-not-allowed border-[color:rgba(83,104,120,0.14)] nova-card-inner text-[color:var(--nova-text-muted)]"
             }`}
           >
             Clear all
@@ -6762,7 +8661,7 @@ function FormulaValidationLogPanel({
       </div>
 
       {status && (
-        <p className="mt-3 rounded-2xl border border-cyan-100/10 bg-cyan-100/[0.025] px-3 py-2 text-xs text-cyan-100/62">
+        <p className="mt-3 rounded-2xl nova-card-inner px-3 py-2 text-xs text-[color:var(--nova-accent-soft)]">
           {status}
         </p>
       )}
@@ -6799,11 +8698,11 @@ function FormulaValidationStat({
   value: number | string;
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-3">
-      <p className="truncate text-[0.62rem] uppercase tracking-[0.16em] text-white/32">
+    <div className="rounded-2xl nova-card-inner p-3">
+      <p className="truncate text-[0.62rem] uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
         {label}
       </p>
-      <p className="mt-2 truncate text-lg font-semibold tracking-[-0.045em] text-white/82">
+      <p className="mt-2 truncate text-lg font-semibold tracking-[-0.045em] text-[color:var(--nova-text)]">
         {formatScoreValue(value)}
       </p>
     </div>
@@ -6825,7 +8724,7 @@ function FormulaValidationSnapshotRow({
   const alignment = formulaValidationAlignment(snapshot);
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-3">
+    <div className="rounded-2xl nova-card-inner p-3">
       <div className="grid gap-3 xl:grid-cols-[minmax(180px,1fr)_minmax(260px,1.2fr)_minmax(220px,0.9fr)] xl:items-center">
         <div className="flex min-w-0 items-center gap-3">
           <TokenAvatar
@@ -6835,14 +8734,14 @@ function FormulaValidationSnapshotRow({
           />
           <div className="min-w-0">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <p className="truncate font-medium text-white/78">
+              <p className="truncate font-medium text-[color:var(--nova-text)]">
                 {snapshot.tokenSymbol}
               </p>
-              <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[0.62rem] text-white/38">
+              <span className="rounded-full nova-card-inner px-2 py-0.5 text-[0.62rem] text-[color:var(--nova-text-muted)]">
                 {chainLabel(snapshot.chain)}
               </span>
             </div>
-            <p className="mt-1 truncate text-xs text-white/34">
+            <p className="mt-1 truncate text-xs text-[color:var(--nova-text-muted)]">
               {formatSnapshotTime(snapshot.analyzedAt)}
             </p>
           </div>
@@ -6877,7 +8776,7 @@ function FormulaValidationSnapshotRow({
                 outcome: event.target.value as FormulaValidationOutcome,
               })
             }
-            className="rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/70 outline-none transition focus:border-cyan-100/24"
+            className="rounded-2xl nova-card-inner px-3 py-2 text-xs text-[color:var(--nova-text-soft)] outline-none transition focus:border-[color:var(--nova-border-strong)]"
           >
             {formulaValidationOutcomes.map((outcome) => (
               <option key={outcome} value={outcome}>
@@ -6891,12 +8790,12 @@ function FormulaValidationSnapshotRow({
               onUpdateSnapshot(snapshot.id, { note: event.target.value })
             }
             placeholder="Manual note"
-            className="rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/70 outline-none transition placeholder:text-white/24 focus:border-cyan-100/24"
+            className="rounded-2xl nova-card-inner px-3 py-2 text-xs text-[color:var(--nova-text-soft)] outline-none transition placeholder:text-[color:var(--nova-text-muted)] focus:border-[color:var(--nova-border-strong)]"
           />
           <button
             type="button"
             onClick={() => onDeleteSnapshot(snapshot.id)}
-            className="rounded-2xl border border-white/10 bg-white/[0.02] px-3 py-2 text-xs text-white/36 transition hover:bg-white/[0.05]"
+            className="rounded-2xl nova-card-inner px-3 py-2 text-xs text-[color:var(--nova-text-muted)] transition hover:nova-card-inner"
           >
             Delete
           </button>
@@ -6904,10 +8803,10 @@ function FormulaValidationSnapshotRow({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-        <span className="rounded-full border border-cyan-100/10 bg-cyan-100/[0.025] px-3 py-1 text-cyan-100/58">
+        <span className="rounded-full nova-card-inner px-3 py-1 text-[color:var(--nova-accent-soft)]">
           Best aligned: {alignment.bestAligned}
         </span>
-        <span className="text-white/30">{alignment.hint}</span>
+        <span className="text-[color:var(--nova-text-muted)]">{alignment.hint}</span>
       </div>
     </div>
   );
@@ -6921,11 +8820,11 @@ function FormulaValidationTinyMetric({
   value: number | string;
 }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-black/18 px-2 py-2 text-center">
-      <p className="text-[0.58rem] uppercase tracking-[0.14em] text-white/30">
+    <div className="rounded-xl nova-card-inner px-2 py-2 text-center">
+      <p className="text-[0.58rem] uppercase tracking-[0.14em] text-[color:var(--nova-text-muted)]">
         {label}
       </p>
-      <p className="mt-1 font-mono text-sm tabular-nums text-white/74">
+      <p className="mt-1 font-mono text-sm tabular-nums text-[color:var(--nova-text-soft)]">
         {value}
       </p>
     </div>
@@ -7004,7 +8903,7 @@ function ExplainableConvictionSkeleton() {
   return (
     <div className="space-y-4">
       <div className="grid gap-4 xl:grid-cols-[0.72fr_1.28fr]">
-        <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
+        <div className="rounded-3xl nova-card-inner p-4">
           <SkeletonLine className="h-2 w-28" />
           <SkeletonLine className="mt-6 h-14 w-32" />
           <SkeletonLine className="mt-5 h-2 w-full" />
@@ -7014,7 +8913,7 @@ function ExplainableConvictionSkeleton() {
           {[0, 1].map((item) => (
             <div
               key={item}
-              className="rounded-3xl border border-white/10 bg-black/20 p-4"
+              className="rounded-3xl nova-card-inner p-4"
             >
               <SkeletonLine className="h-2 w-32" />
               <div className="mt-5 space-y-4">
@@ -7057,13 +8956,13 @@ function DevCacheStatusPanel({
   );
 
   return (
-    <details className="group rounded-2xl border border-white/8 bg-black/10 p-3">
-      <summary className="cursor-pointer list-none text-xs uppercase tracking-[0.18em] text-white/34 transition hover:text-white/52">
+    <details className="group rounded-2xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner p-3">
+      <summary className="cursor-pointer list-none text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)] transition hover:text-[color:var(--nova-text-soft)]">
         Developer diagnostics
-        <span className="ml-2 text-white/24 group-open:hidden">Show</span>
-        <span className="ml-2 hidden text-white/24 group-open:inline">Hide</span>
+        <span className="ml-2 text-[color:var(--nova-text-muted)] group-open:hidden">Show</span>
+        <span className="ml-2 hidden text-[color:var(--nova-text-muted)] group-open:inline">Hide</span>
       </summary>
-      <div className="mt-3 rounded-2xl border border-white/8 bg-black/20 p-3">
+      <div className="mt-3 rounded-2xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner p-3">
         {loadState === "loading" && <WalletBehaviorPreviewSkeleton />}
         {loadState === "error" && (
           <BehaviorPreviewState tone="error">
@@ -7090,17 +8989,17 @@ function DevCacheStatusPanel({
               <BehaviorMetric label="Sets" value={data?.stats.totalSets ?? 0} />
             </div>
             {routeStats.length > 0 && (
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
-                <p className="text-xs uppercase tracking-[0.16em] text-white/36">
+              <div className="rounded-2xl nova-card-inner p-3">
+                <p className="text-xs uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
                   Route cache
                 </p>
                 <div className="mt-3 space-y-2">
                   {routeStats.slice(0, 8).map((route) => (
                     <div
                       key={route.route}
-                      className="grid grid-cols-[1.2fr_0.5fr_0.5fr_0.55fr_0.65fr_0.65fr] gap-2 rounded-xl border border-white/8 bg-white/[0.018] px-3 py-2 text-xs text-white/42"
+                      className="grid grid-cols-[1.2fr_0.5fr_0.5fr_0.55fr_0.65fr_0.65fr] gap-2 rounded-xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner px-3 py-2 text-xs text-[color:var(--nova-text-soft)]"
                     >
-                      <span className="truncate text-white/62">{route.route}</span>
+                      <span className="truncate text-[color:var(--nova-text-soft)]">{route.route}</span>
                       <span>H {route.hits}</span>
                       <span>M {route.misses}</span>
                       <span>{route.hitRate}%</span>
@@ -7112,8 +9011,8 @@ function DevCacheStatusPanel({
               </div>
             )}
             {(data?.stats.recentExpensiveMisses || []).length > 0 && (
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
-                <p className="text-xs uppercase tracking-[0.16em] text-white/36">
+              <div className="rounded-2xl nova-card-inner p-3">
+                <p className="text-xs uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
                   Recent expensive misses
                 </p>
                 <div className="mt-3 space-y-2">
@@ -7122,7 +9021,7 @@ function DevCacheStatusPanel({
                     .map((miss) => (
                       <p
                         key={`${miss.createdAt}-${miss.key}`}
-                        className="truncate rounded-xl border border-white/8 bg-white/[0.018] px-3 py-2 text-xs text-white/38"
+                        className="truncate rounded-xl border border-[color:rgba(83,104,120,0.14)] nova-card-inner px-3 py-2 text-xs text-[color:var(--nova-text-muted)]"
                       >
                         {miss.route} · {miss.provider} · {miss.key}
                       </p>
@@ -7130,15 +9029,15 @@ function DevCacheStatusPanel({
                 </div>
               </div>
             )}
-            <p className="rounded-2xl border border-white/10 bg-white/[0.02] p-3 text-xs leading-relaxed text-white/32">
+            <p className="rounded-2xl nova-card-inner p-3 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
               Developer-only cache observability. Generated{" "}
               {data?.generatedAt
                 ? new Date(data.generatedAt).toLocaleTimeString()
                 : "pending"}
               . No secrets or full wallet addresses are exposed.
             </p>
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-xs leading-relaxed text-white/35">
-              <span className="text-white/55">Unified analysis:</span>{" "}
+            <div className="rounded-2xl nova-card-inner p-3 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
+              <span className="text-[color:var(--nova-text-soft)]">Unified analysis:</span>{" "}
               {unifiedAnalysisState}
               {unifiedAnalysis?.modules && (
                 <span>
@@ -7152,7 +9051,7 @@ function DevCacheStatusPanel({
                 </span>
               )}
               {unifiedAnalysisError && (
-                <span className="text-amber-100/60"> · {unifiedAnalysisError}</span>
+                <span className="text-[color:var(--nova-warning)]"> · {unifiedAnalysisError}</span>
               )}
             </div>
           </div>
@@ -7290,32 +9189,32 @@ function BubbleIntelligenceExperience({
 
   return (
     <div className="mx-auto max-w-[1720px] space-y-5">
-      <section className="relative overflow-hidden rounded-[2rem] border border-cyan-100/10 bg-[#05070b]/94 p-6 shadow-[0_28px_120px_rgba(0,0,0,0.36)]">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_28%_8%,rgba(34,211,238,0.11),transparent_34%),radial-gradient(circle_at_88%_28%,rgba(126,87,194,0.12),transparent_36%)]" />
+      <section className="relative overflow-hidden rounded-[2rem] nova-card-inner p-6 shadow-[0_28px_120px_rgba(0,0,0,0.36)]">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_28%_8%,rgba(83,104,120,0.11),transparent_34%),radial-gradient(circle_at_88%_28%,rgba(94,114,107,0.12),transparent_36%)]" />
         <div className="relative grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
           <div>
-            <p className="text-xs uppercase tracking-[0.34em] text-cyan-100/48">
+            <p className="text-xs uppercase tracking-[0.34em] text-[color:var(--nova-accent-soft)]">
               Bubble Intelligence
             </p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-[-0.07em] text-white/94">
+            <h1 className="mt-3 text-4xl font-semibold tracking-[-0.07em] text-[color:var(--nova-text)]">
               See Beyond the Chart
             </h1>
-            <p className="mt-3 max-w-3xl text-sm leading-relaxed text-white/48">
+            <p className="mt-3 max-w-3xl text-sm leading-relaxed text-[color:var(--nova-text-soft)]">
               Visualize holder concentration, wallet clusters, and relationship
               evidence behind the token.
             </p>
           </div>
-          <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/24 px-4 py-3">
+          <div className="flex items-center gap-3 rounded-2xl border border-[color:var(--nova-border)] nova-card-inner px-4 py-3">
             <TokenAvatar
               logoUrl={resolveTokenLogo(tokenData)}
               sizeClass="h-11 w-11"
               token={token}
             />
             <div>
-              <p className="text-[10px] uppercase tracking-[0.18em] text-white/34">
+              <p className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">
                 Ecosystem graph
               </p>
-              <p className="mt-1 text-sm font-medium text-white/78">
+              <p className="mt-1 text-sm font-medium text-[color:var(--nova-text)]">
                 {token} wallet map
               </p>
             </div>
@@ -7333,19 +9232,19 @@ function BubbleIntelligenceExperience({
       />
 
       {clusterLoadState === "error" && (
-        <div className="rounded-2xl border border-amber-100/12 bg-amber-100/[0.035] px-4 py-3 text-xs leading-relaxed text-amber-100/62">
+        <div className="rounded-2xl border border-[color:var(--nova-border)] bg-[rgba(83,104,120,0.065)] px-4 py-3 text-xs leading-relaxed text-[color:var(--nova-warning)]">
           {clusterError ||
             "Cluster data is unavailable. The graph can only show available holder/profile evidence."}
         </div>
       )}
       {!hasRelationships && graph.nodes.length > 0 && (
-        <div className="rounded-2xl border border-cyan-100/10 bg-cyan-100/[0.025] px-4 py-3 text-xs leading-relaxed text-white/42">
+        <div className="rounded-2xl nova-card-inner px-4 py-3 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
           No high-confidence wallet-to-wallet relationship group detected from
           available data.
         </div>
       )}
       {graph.nodes.length > 0 && graph.nodes.length <= 10 && (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.025] px-4 py-3 text-xs leading-relaxed text-white/38">
+        <div className="rounded-2xl nova-card-inner px-4 py-3 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
           Limited wallet coverage. The bubble map is based only on currently
           analyzed holders.
         </div>
@@ -7373,10 +9272,10 @@ function BubbleIntelligenceExperience({
           {graph.nodes.length === 0 && clusterLoadState !== "loading" && (
             <div className="absolute inset-0 z-30 flex items-center justify-center px-8 text-center">
               <div>
-                <p className="text-lg font-medium tracking-[-0.04em] text-white/72">
+                <p className="text-lg font-medium tracking-[-0.04em] text-[color:var(--nova-text-soft)]">
                   No analyzed holder nodes available yet.
                 </p>
-                <p className="mx-auto mt-2 max-w-xl text-sm leading-relaxed text-white/38">
+                <p className="mx-auto mt-2 max-w-xl text-sm leading-relaxed text-[color:var(--nova-text-muted)]">
                   Bubble Intelligence needs real holder rows and wallet profile
                   data. NovaOS will not generate placeholder wallets.
                 </p>
@@ -7392,7 +9291,7 @@ function BubbleIntelligenceExperience({
         </div>
       </section>
 
-      <p className="text-xs leading-relaxed text-white/30">
+      <p className="text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
         Only observed holders and inferred relationships are shown. NovaOS does
         not invent wallets, ownership, or common-control relationships.
       </p>
@@ -7408,11 +9307,11 @@ function BubbleNodeDrawer({
   const [copied, setCopied] = useState(false);
   if (!node) {
     return (
-      <div className="rounded-2xl border border-white/10 bg-[#06080c]/75 p-5">
-        <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/42">
+      <div className="rounded-2xl nova-card-inner p-5">
+        <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--nova-accent-soft)]">
           Wallet Detail
         </p>
-        <p className="mt-4 text-sm leading-relaxed text-white/40">
+        <p className="mt-4 text-sm leading-relaxed text-[color:var(--nova-text-soft)]">
           Select a bubble to inspect factual wallet-level evidence.
         </p>
       </div>
@@ -7428,38 +9327,38 @@ function BubbleNodeDrawer({
   }
 
   return (
-    <aside className="max-h-[680px] overflow-y-auto rounded-2xl border border-white/10 bg-[#06080c]/92 p-5 shadow-[0_24px_90px_rgba(0,0,0,0.24)]">
+    <aside className="max-h-[680px] overflow-y-auto rounded-2xl nova-card-inner p-5 shadow-[0_24px_90px_rgba(0,0,0,0.24)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[10px] uppercase tracking-[0.24em] text-cyan-100/42">
+          <p className="text-[10px] uppercase tracking-[0.24em] text-[color:var(--nova-accent-soft)]">
             Wallet Intelligence
           </p>
-          <p className="mt-2 truncate font-mono text-base font-semibold text-white/82">
+          <p className="mt-2 truncate font-mono text-base font-semibold text-[color:var(--nova-text)]">
             {activeNode.shortAddress}
           </p>
-          <p className="mt-1 break-all font-mono text-[11px] leading-relaxed text-white/30">
+          <p className="mt-1 break-all font-mono text-[11px] leading-relaxed text-[color:var(--nova-text-muted)]">
             {activeNode.address}
           </p>
         </div>
         <button
           type="button"
           onClick={copyAddress}
-          className="shrink-0 rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-xs text-white/58 transition hover:border-cyan-100/20 hover:text-cyan-100/78"
+          className="shrink-0 rounded-xl nova-card-inner px-3 py-2 text-xs text-[color:var(--nova-text-soft)] transition hover:border-[color:var(--nova-border-strong)] hover:text-[color:var(--nova-accent)]"
         >
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2">
-        <span className="rounded-full border border-white/10 bg-white/[0.035] px-3 py-1 text-xs text-white/55">
+        <span className="rounded-full nova-card-inner px-3 py-1 text-xs text-[color:var(--nova-text-soft)]">
           Rank #{activeNode.rank}
         </span>
         {primaryCluster ? (
-          <span className="rounded-full border border-cyan-100/14 bg-cyan-100/[0.045] px-3 py-1 text-xs text-cyan-100/64">
+          <span className="rounded-full nova-card-inner px-3 py-1 text-xs text-[color:var(--nova-accent)]">
             {primaryCluster}
           </span>
         ) : (
-          <span className="rounded-full border border-white/10 bg-white/[0.025] px-3 py-1 text-xs text-white/36">
+          <span className="rounded-full nova-card-inner px-3 py-1 text-xs text-[color:var(--nova-text-muted)]">
             Isolated holder
           </span>
         )}
@@ -7488,7 +9387,7 @@ function BubbleNodeDrawer({
         />
       </div>
 
-      <p className="mt-4 text-xs leading-relaxed text-white/30">
+      <p className="mt-4 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
         Relationship counts come from available cluster and bundle inference.
         This does not prove common ownership, identity or profitability.
       </p>
@@ -7534,11 +9433,11 @@ function BubbleSummaryMetric({
   value: number | string;
 }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-black/38 px-3 py-2 backdrop-blur-xl">
-      <p className="text-[10px] uppercase tracking-[0.18em] text-white/34">
+    <div className="rounded-xl border border-[color:var(--nova-border)] nova-card-inner px-3 py-2 backdrop-blur-xl">
+      <p className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">
         {label}
       </p>
-      <p className="mt-1 truncate text-sm font-semibold tracking-[-0.035em] text-white/72">
+      <p className="mt-1 truncate text-sm font-semibold tracking-[-0.035em] text-[color:var(--nova-text-soft)]">
         {value}
       </p>
     </div>
@@ -7548,7 +9447,7 @@ function BubbleSummaryMetric({
 function BubbleGraphSkeleton() {
   return (
     <div className="relative z-10 min-h-[560px]">
-      <div className="absolute left-1/2 top-1/2 h-28 w-28 -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-100/10 bg-cyan-100/[0.04]" />
+      <div className="absolute left-1/2 top-1/2 h-28 w-28 -translate-x-1/2 -translate-y-1/2 rounded-full nova-card-inner" />
       {Array.from({ length: 16 }).map((_, index) => (
         <SkeletonLine
           key={index}
@@ -8146,17 +10045,41 @@ function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function deriveArenaHolderBehaviorPosture({
+  behaviorPreview,
+  personalities,
+  tokenIntelligence,
+  walletRows,
+}: {
+  behaviorPreview: WalletBehaviorPreviewData | null;
+  personalities: WalletPersonalityPreview[];
+  tokenIntelligence: TokenIntelligenceData | null;
+  walletRows: WalletRow[];
+}) {
+  const personalityCounts = personalities.reduce<Record<string, number>>((counts, personality) => {
+    counts[personality.personalityType] = (counts[personality.personalityType] ?? 0) + 1;
+    return counts;
+  }, {});
+  const strongest = Object.entries(personalityCounts).sort((left, right) => right[1] - left[1])[0];
+  if (strongest?.[0]) return strongest[0];
+  if (behaviorPreview?.summary.dominantBehaviorClass) {
+    return behaviorPreview.summary.dominantBehaviorClass;
+  }
+  if (tokenIntelligence?.behaviorSummary.dominantBehaviorClass) {
+    return tokenIntelligence.behaviorSummary.dominantBehaviorClass;
+  }
+  return walletRows.length ? "Mixed Holder Base" : undefined;
+}
+
 function AIHumanArenaMvpSection({
   behaviorPreview,
   conviction,
   convictionError,
   convictionLoadState,
   formulaV3,
-  holderLoadState,
   personalities,
   tokenData,
   tokenIntelligence,
-  unifiedAnalysis,
   walletRows,
 }: {
   behaviorPreview: WalletBehaviorPreviewData | null;
@@ -8166,11 +10089,9 @@ function AIHumanArenaMvpSection({
   convictionLoadState: HolderLoadState;
   formulaV3: ConvictionFormulaV3Result | null;
   holderError: string;
-  holderLoadState: HolderLoadState;
   personalities: WalletPersonalityPreview[];
   tokenData: TokenResult;
   tokenIntelligence: TokenIntelligenceData | null;
-  unifiedAnalysis: UnifiedTokenAnalysisData | null;
   walletRows: WalletRow[];
 }) {
   const tokenKey = arenaTokenStorageKey(tokenData);
@@ -8212,17 +10133,14 @@ function AIHumanArenaMvpSection({
     conviction
       ? Math.round(formulaV3?.finalConvictionScoreV3 ?? conviction.finalConvictionScore)
       : null;
-  const flowModel = conviction
-    ? buildWalletFlowModel({
+  const holderBehaviorPosture = conviction
+    ? deriveArenaHolderBehaviorPosture({
         behaviorPreview,
-        conviction,
-        holderLoadState,
         personalities,
         tokenIntelligence,
-        unifiedAnalysis,
         walletRows,
       })
-    : null;
+    : undefined;
   const novaStance = conviction
     ? deriveNovaArenaStance({
         convictionScore: aiConvictionScore,
@@ -8234,7 +10152,7 @@ function AIHumanArenaMvpSection({
           conviction.subScores.marketMomentum,
         ]),
         structuralSafety: conviction.subScores.riskProtection,
-        walletFlow: flowModel?.dominantFlow,
+        walletFlow: holderBehaviorPosture,
       })
     : ({
         stance: "Pending",
@@ -8349,15 +10267,15 @@ function AIHumanArenaMvpSection({
                 onClick={() => setSelectedTimeframe(timeframe)}
                 className={`rounded-2xl border px-4 py-3 text-sm font-medium transition ${
                   selectedTimeframe === timeframe
-                    ? "border-cyan-100/24 bg-cyan-100/[0.08] text-cyan-50/82 shadow-[0_0_24px_rgba(103,232,249,0.12)]"
-                    : "border-white/10 bg-black/20 text-white/44 hover:text-white/68"
+                    ? "border-[color:var(--nova-border-strong)] bg-[rgba(178,190,181,0.12)] text-[color:var(--nova-text)] shadow-[0_0_24px_rgba(83,104,120,0.12)]"
+                    : "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-soft)] hover:text-[color:var(--nova-text-soft)]"
                 }`}
               >
                 {timeframe} Arena
               </button>
             ))}
           </div>
-          <p className="mt-4 text-xs leading-relaxed text-white/42">
+          <p className="mt-4 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
             Each token has separate daily and weekly arenas. Human votes are
             collected before the UTC close. NovaOS locks its stance at the close
             time. Outcomes remain pending until reliable resolution data is available.
@@ -8405,13 +10323,13 @@ function AIHumanArenaMvpSection({
                 className={`rounded-2xl border px-3 py-3 text-sm font-medium transition ${arenaVoteButtonClass(
                   vote,
                   (currentUserEntry?.humanVote || activePendingVote) === vote
-                )} disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/[0.02] disabled:text-white/24`}
+                )} disabled:cursor-not-allowed disabled:border-[color:rgba(83,104,120,0.14)] disabled:nova-card-inner disabled:text-[color:var(--nova-text-muted)]`}
               >
                 {vote}
               </button>
             ))}
           </div>
-          <p className="mt-3 text-xs text-white/42">
+          <p className="mt-3 text-xs text-[color:var(--nova-text-soft)]">
             {currentUserEntry
               ? "Vote locked for this arena window."
               : !progress.votingOpen
@@ -8424,7 +10342,7 @@ function AIHumanArenaMvpSection({
             type="button"
             disabled={!activePendingVote || Boolean(currentUserEntry) || !progress.votingOpen}
             onClick={submitVote}
-            className="mt-4 rounded-full border border-cyan-100/18 bg-cyan-100/[0.08] px-4 py-2 text-xs font-medium text-cyan-50/78 transition hover:bg-cyan-100/[0.12] disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/[0.02] disabled:text-white/28"
+            className="mt-4 rounded-full border border-[color:var(--nova-border-strong)] bg-[rgba(178,190,181,0.12)] px-4 py-2 text-xs font-medium text-[color:var(--nova-text)] transition hover:bg-[rgba(83,104,120,0.16)] disabled:cursor-not-allowed disabled:border-[color:rgba(83,104,120,0.14)] disabled:nova-card-inner disabled:text-[color:var(--nova-text-muted)]"
           >
             Submit Vote
           </button>
@@ -8446,7 +10364,7 @@ function AIHumanArenaMvpSection({
             ))}
           </div>
           {voteDistribution.totalVotes === 0 && (
-            <p className="mt-3 text-xs text-white/34">No local votes yet.</p>
+            <p className="mt-3 text-xs text-[color:var(--nova-text-muted)]">No local votes yet.</p>
           )}
           <div className="mt-4">
             <ArenaFact label="Human consensus" value={voteDistribution.consensus} />
@@ -8469,35 +10387,35 @@ function AIHumanArenaMvpSection({
               publishedCurrentEntry?.aiPublishedStance || novaStance.stance
             )}`}
           >
-            <p className="text-xs uppercase tracking-[0.16em] text-white/34">
+            <p className="text-xs uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
               {publishedCurrentEntry ? "Published stance" : "Current model lean"}
             </p>
-            <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-white/90">
+            <p className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[color:var(--nova-text)]">
               {publishedCurrentEntry?.aiPublishedStance || novaStance.stance}
             </p>
-            <p className="mt-2 text-xs leading-relaxed text-white/46">
+            <p className="mt-2 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
               {publishedCurrentEntry
                 ? "Local lock recorded after the UTC close."
                 : "Indicative, not locked."}
             </p>
           </div>
-          <p className="mt-3 text-sm leading-relaxed text-white/50">
+          <p className="mt-3 text-sm leading-relaxed text-[color:var(--nova-text-soft)]">
             {novaStance.reason}
           </p>
         </div>
 
         <div className={terminalSurfaceClass + " p-5"}>
           <ArenaSectionTitle title="Latest Result" />
-          <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-4">
-            <p className="text-xs uppercase tracking-[0.16em] text-white/34">
+          <div className="mt-4 rounded-2xl nova-card-inner p-4">
+            <p className="text-xs uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
               Settlement
             </p>
-            <p className="mt-2 text-xl font-semibold tracking-[-0.04em] text-white/86">
+            <p className="mt-2 text-xl font-semibold tracking-[-0.04em] text-[color:var(--nova-text)]">
               {latestResolvedEntry?.winner
                 ? `Latest winner: ${latestResolvedEntry.winner}`
                 : "Awaiting first settlement."}
             </p>
-            <p className="mt-2 text-xs leading-relaxed text-white/42">
+            <p className="mt-2 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
               Outcomes remain pending until reliable resolution data is available.
             </p>
           </div>
@@ -8682,18 +10600,18 @@ function buildArenaVoteDistribution(entries: ArenaVoteEntry[]) {
 }
 
 function arenaVoteButtonClass(vote: ArenaVote, active: boolean) {
-  if (!active) return "border-white/10 bg-black/20 text-white/42 hover:text-white/64";
-  return `${arenaPublishedSurfaceClass(vote)} shadow-[0_0_26px_rgba(103,232,249,0.12)]`;
+  if (!active) return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-soft)] hover:text-[color:var(--nova-text)]";
+  return `${arenaPublishedSurfaceClass(vote)} shadow-[0_0_26px_rgba(83,104,120,0.12)]`;
 }
 
 function arenaPublishedSurfaceClass(stance: NovaArenaStance | ArenaVote) {
   if (stance === "Bullish") {
-    return "border-cyan-100/20 bg-cyan-100/[0.07] text-cyan-50/78";
+    return "border-[color:var(--nova-border-strong)] bg-[rgba(83,104,120,0.1)] text-[color:var(--nova-text)]";
   }
   if (stance === "Bearish") {
-    return "border-amber-100/20 bg-amber-100/[0.06] text-amber-50/76";
+      return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-warning)]";
   }
-  return "border-purple-100/18 bg-purple-100/[0.06] text-purple-50/76";
+  return "border-[color:var(--nova-border)] bg-[rgba(94,114,107,0.1)] text-[color:var(--nova-accent-soft)]";
 }
 
 function ArenaEmptyState({
@@ -8705,7 +10623,7 @@ function ArenaEmptyState({
 }) {
   return (
     <div className={`${terminalSurfaceClass} p-8 text-center`}>
-      <p className={tone === "error" ? "text-sm text-red-100/60" : "text-sm text-white/42"}>
+      <p className={tone === "error" ? "text-sm text-[color:var(--nova-danger)]" : "text-sm text-[color:var(--nova-text-soft)]"}>
         {children}
       </p>
     </div>
@@ -8714,7 +10632,7 @@ function ArenaEmptyState({
 
 function ArenaSectionTitle({ title }: { title: string }) {
   return (
-    <p className="text-xs uppercase tracking-[0.18em] text-white/38">
+    <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">
       {title}
     </p>
   );
@@ -8722,16 +10640,16 @@ function ArenaSectionTitle({ title }: { title: string }) {
 
 function ArenaFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
-      <p className="text-xs text-white/34">{label}</p>
-      <p className="mt-1 text-sm font-medium text-white/74">{value}</p>
+    <div className="rounded-2xl nova-card-inner p-3">
+      <p className="text-xs text-[color:var(--nova-text-muted)]">{label}</p>
+      <p className="mt-1 text-sm font-medium text-[color:var(--nova-text-soft)]">{value}</p>
     </div>
   );
 }
 
 function ArenaChip({ children }: { children: React.ReactNode }) {
   return (
-    <span className="rounded-full border border-white/10 bg-white/[0.035] px-3 py-1 text-xs font-medium text-white/54">
+    <span className="rounded-full nova-card-inner px-3 py-1 text-xs font-medium text-[color:var(--nova-text-soft)]">
       {children}
     </span>
   );
@@ -8752,12 +10670,12 @@ function ArenaCountdownCard({
         <ArenaSectionTitle title="Voting Window" />
         <ArenaChip>{window.votingOpen ? "Voting open" : "Voting closed"}</ArenaChip>
       </div>
-      <p className="mt-4 text-3xl font-semibold tracking-[-0.05em] text-white/90">
+      <p className="mt-4 text-3xl font-semibold tracking-[-0.05em] text-[color:var(--nova-text)]">
         {timeRemainingLabel}
       </p>
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/[0.06]">
+      <div className="mt-4 h-2 overflow-hidden rounded-full nova-card-inner">
         <div
-          className="h-full rounded-full bg-cyan-100/65 shadow-[0_0_18px_rgba(103,232,249,0.24)] transition-all"
+          className="h-full rounded-full bg-[rgba(83,104,120,0.65)] shadow-[0_0_18px_rgba(83,104,120,0.24)] transition-all"
           style={{ width: `${progressPercent}%` }}
         />
       </div>
@@ -8781,10 +10699,10 @@ function ArenaDistributionBar({
   return (
     <div>
       <div className="flex items-center justify-between gap-3 text-xs">
-        <span className="font-medium text-white/62">{label}</span>
-        <span className="font-mono text-white/46">{percent}%</span>
+        <span className="font-medium text-[color:var(--nova-text-soft)]">{label}</span>
+        <span className="font-mono text-[color:var(--nova-text-soft)]">{percent}%</span>
       </div>
-      <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/[0.055]">
+      <div className="mt-2 h-2 overflow-hidden rounded-full nova-card-inner">
         <div
           className={`h-full rounded-full transition-all ${arenaDistributionFillClass(tone)}`}
           style={{ width: `${percent}%` }}
@@ -8796,50 +10714,13 @@ function ArenaDistributionBar({
 
 function arenaDistributionFillClass(vote: ArenaVote) {
   if (vote === "Bullish") {
-    return "bg-cyan-100/70 shadow-[0_0_16px_rgba(103,232,249,0.2)]";
+    return "bg-[rgba(83,104,120,0.70)] shadow-[0_0_16px_rgba(83,104,120,0.2)]";
   }
   if (vote === "Bearish") {
-    return "bg-amber-100/68 shadow-[0_0_16px_rgba(253,230,138,0.16)]";
+    return "bg-[rgba(83,104,120,0.52)] shadow-[0_0_16px_rgba(83,104,120,0.16)]";
   }
-  return "bg-purple-100/68 shadow-[0_0_16px_rgba(216,180,254,0.16)]";
+  return "bg-[rgba(127,144,150,0.58)] shadow-[0_0_16px_rgba(83,104,120,0.16)]";
 }
-
-type FlowLabel = WalletFlowV2Result["flowDirection"];
-
-type WalletFlowContributor = {
-  address: string;
-  displayAddress: string;
-  ownership: string;
-  accumulationPressure?: number;
-  distributionPressure?: number;
-  rotationRisk?: number;
-  netFlowBiasScore?: number;
-  confidenceScore?: number;
-  flowLabel: FlowLabel;
-  pressureScore: number;
-  dataQuality?: string;
-};
-
-type WalletFlowInsight = {
-  detail?: string;
-  title: string;
-  value: string;
-};
-
-type WalletFlowModel = {
-  accumulationPressure?: number;
-  distributionPressure?: number;
-  rotationRisk?: number;
-  dormancyPressure?: number;
-  netFlowBias?: number;
-  confidenceScore?: number;
-  confidenceLabel: string;
-  dominantFlow?: string;
-  contributors: WalletFlowContributor[];
-  insights: WalletFlowInsight[];
-  hasDeepBehavior: boolean;
-  hasPartialInput: boolean;
-};
 
 function WalletFlowsMvpSection({
   behaviorPreview,
@@ -8848,15 +10729,15 @@ function WalletFlowsMvpSection({
   conviction,
   convictionError,
   convictionLoadState,
+  holderIntelligenceMatrix,
+  holderIntelligenceSummary,
   holderError,
   holderLoadState,
-  personalities,
+  novaConviction,
   personalityError,
   tokenData,
-  tokenFlowSummaryV2,
   tokenIntelligence,
   unifiedAnalysis,
-  walletFlowV2Results,
   walletRows,
 }: {
   behaviorPreview: WalletBehaviorPreviewData | null;
@@ -8865,26 +10746,24 @@ function WalletFlowsMvpSection({
   conviction: ExplainableConvictionData | null;
   convictionError: string;
   convictionLoadState: HolderLoadState;
+  holderIntelligenceMatrix: HolderIntelligenceProfile[];
+  holderIntelligenceSummary: HolderIntelligenceSummary | null;
   holderError: string;
   holderLoadState: HolderLoadState;
-  personalities: WalletPersonalityPreview[];
+  novaConviction: NovaConvictionResult | null;
   personalityError: string;
   tokenData: TokenResult;
-  tokenFlowSummaryV2: TokenFlowSummaryV2 | null;
   tokenIntelligence: TokenIntelligenceData | null;
   unifiedAnalysis: UnifiedTokenAnalysisData | null;
-  walletFlowV2Results: WalletFlowV2Result[];
   walletRows: WalletRow[];
 }) {
-  const flowModel = buildWalletFlowModel({
+  const behaviorModel = buildHolderBehaviorModel({
     behaviorPreview,
     conviction,
-    holderLoadState,
-    personalities,
-    tokenFlowSummaryV2,
+    holderIntelligenceMatrix,
+    holderIntelligenceSummary,
+    novaConviction,
     tokenIntelligence,
-    unifiedAnalysis,
-    walletFlowV2Results,
     walletRows,
   });
   const providerLimitReached = [
@@ -8905,48 +10784,41 @@ function WalletFlowsMvpSection({
 
   if (!hasToken) {
     return (
-      <WalletFlowStateCard
-        title="Select a token to inspect wallet flows."
-        detail="Wallet Flows will use loaded holder rows, wallet profiles, conviction data, personalities and transfer behavior when a token analysis is available."
+      <HolderBehaviorStateCard
+        title="Select a token to inspect holder behavior."
+        detail="Holder Behavior Intelligence appears after analyzed holder evidence is available for the selected token."
       />
     );
   }
 
   return (
-    <div className="mx-auto max-w-[1680px] space-y-4">
+    <div className="mx-auto max-w-[1680px] space-y-3">
       <TerminalSectionHeader
-        badge="Behavioral inference only"
-        subtitle="Wallet Flows tracks how major holders are behaving based on observed ownership, activity and holder intelligence signals."
+        badge="Holder Behavior Intelligence"
+        subtitle="Behavioral intelligence derived from analyzed holders. Nova evaluates wallet quality, discipline, ownership structure and conviction patterns."
         title="Wallet Flows"
       >
-          <div className="grid gap-2 rounded-2xl border border-white/10 bg-black/22 p-3 text-xs text-white/36 sm:grid-cols-2 lg:min-w-[360px]">
-            <FlowTinyFact label="Token" value={tokenData.symbol} />
-            <FlowTinyFact label="Chain" value={chainLabel(tokenData.chain)} />
-            <FlowTinyFact label="Holder rows" value={walletRows.length || "Pending"} />
-            <FlowTinyFact
-              label="Deep behavior"
-              value={flowModel.hasDeepBehavior ? "Available" : "Unavailable"}
-            />
-          </div>
+        <div className="grid gap-2 rounded-2xl nova-card-inner p-3 text-xs text-[color:var(--nova-text-muted)] sm:grid-cols-3 lg:min-w-[420px]">
+          <BehaviorTinyFact label="Token" value={cleanTokenSymbol(tokenData.symbol)} />
+          <BehaviorTinyFact label="Chain" value={chainLabel(tokenData.chain)} />
+          <BehaviorTinyFact
+            label="Analyzed Holders"
+            value={behaviorModel.analyzedHolders || "Pending"}
+          />
+        </div>
       </TerminalSectionHeader>
 
-      {(providerLimitReached || flowModel.hasPartialInput || !flowModel.hasDeepBehavior) && (
+      {(providerLimitReached || behaviorModel.hasPartialInput) && (
         <div className="grid gap-3 lg:grid-cols-3">
-          {!flowModel.hasDeepBehavior && (
-            <WalletFlowNotice
-              title="No deep behavior available"
-              detail="Transfer-derived accumulation and distribution pressure can only be shown when deep wallet behavior is loaded."
-            />
-          )}
           {providerLimitReached && (
-            <WalletFlowNotice
+            <HolderBehaviorNotice
               title="Provider limit reached"
               detail="One or more providers reported a limit or rate restriction. The page is using the partial state already loaded."
               tone="warning"
             />
           )}
-          {flowModel.hasPartialInput && (
-            <WalletFlowNotice
+          {behaviorModel.hasPartialInput && (
+            <HolderBehaviorNotice
               title="Partial input"
               detail="Some wallet sources are missing or incomplete, so confidence and labels are conservative."
             />
@@ -8955,466 +10827,519 @@ function WalletFlowsMvpSection({
       )}
 
       {isLoading && walletRows.length === 0 && !conviction && (
-        <WalletFlowStateCard
-          title="Loading wallet flow inputs."
-          detail="NovaOS is waiting for holder rows, wallet profiles and conviction transfer behavior already requested for this token."
+        <HolderBehaviorStateCard
+          title="Loading holder behavior inputs."
+          detail="NovaOS is waiting for holder rows, wallet profiles and conviction evidence already requested for this token."
           pulse
         />
       )}
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
-        <WalletFlowSummaryCard
-          label="Accumulation Pressure"
-          value={formatFlowScore(flowModel.accumulationPressure)}
-          detail="Ownership-weighted accumulation pressure."
-        />
-        <WalletFlowSummaryCard
-          label="Distribution Pressure"
-          value={formatFlowScore(flowModel.distributionPressure)}
-          detail="Ownership-weighted distribution pressure."
-        />
-        <WalletFlowSummaryCard
-          label="Rotation Pressure"
-          value={formatFlowScore(flowModel.rotationRisk)}
-          detail="Rotation exposure from behavior and holder inputs."
-        />
-        <WalletFlowSummaryCard
-          label="Dormancy Pressure"
-          value={formatFlowScore(flowModel.dormancyPressure)}
-          detail="Inactive ownership pressure from available profiles."
-        />
-        <WalletFlowSummaryCard
-          label="Net Flow Bias"
-          value={formatFlowBias(flowModel.netFlowBias)}
-          detail="Positive means accumulation, negative means distribution."
-        />
-        <WalletFlowSummaryCard
-          label="Flow Confidence"
-          value={
-            typeof flowModel.confidenceScore === "number"
-              ? `${flowModel.confidenceScore}/100`
-              : flowModel.confidenceLabel
-          }
-          detail={`${flowModel.confidenceLabel} confidence from available coverage.`}
-        />
-        <WalletFlowSummaryCard
-          label="Dominant Flow"
-          value={flowModel.dominantFlow || "N/A"}
-          detail="Dominant regime from V2 rules."
-        />
+      <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+        {behaviorModel.primaryScores.map((score) => (
+          <BehaviorScoreCard key={score.label} score={score} />
+        ))}
       </div>
 
-      <section className="grid gap-3 lg:grid-cols-4">
-        {flowModel.insights.map((insight) => (
-          <WalletFlowInsightCard key={insight.title} insight={insight} />
-        ))}
-      </section>
+      <div className="grid gap-3 xl:grid-cols-[1fr_1fr_1.05fr]">
+        <BehaviorProfilePanel metrics={behaviorModel.profileMetrics} />
+        <BehaviorDistributionPanel rows={behaviorModel.distributionRows} />
+        <section className="grid gap-3">
+          <DominantBehaviorCard model={behaviorModel} />
+          <BehaviorSummaryCard summary={behaviorModel.summary} />
+        </section>
+      </div>
 
-      <TopFlowContributorsTable contributors={flowModel.contributors} />
+      <TopConvictionContributorsTable contributors={behaviorModel.contributors} />
     </div>
   );
 }
 
-function buildWalletFlowModel({
+type HolderBehaviorScore = {
+  detail: string;
+  label: string;
+  value: number | null;
+};
+
+type HolderBehaviorMetric = {
+  label: string;
+  value: number | null;
+};
+
+type HolderBehaviorContributor = {
+  address: string;
+  behaviorLabel: string;
+  contribution: number;
+  displayAddress: string;
+  note: string;
+  quality: number;
+};
+
+type HolderBehaviorModel = {
+  analyzedHolders: number | null;
+  contributors: HolderBehaviorContributor[];
+  distributionRows: HolderBehaviorMetric[];
+  dominantBehavior: string;
+  hasPartialInput: boolean;
+  primaryScores: HolderBehaviorScore[];
+  profileMetrics: HolderBehaviorMetric[];
+  summary: string;
+};
+
+function buildHolderBehaviorModel({
   behaviorPreview,
   conviction,
-  holderLoadState,
-  personalities,
-  tokenFlowSummaryV2,
+  holderIntelligenceMatrix,
+  holderIntelligenceSummary,
+  novaConviction,
   tokenIntelligence,
-  unifiedAnalysis,
-  walletFlowV2Results,
   walletRows,
 }: {
   behaviorPreview: WalletBehaviorPreviewData | null;
   conviction: ExplainableConvictionData | null;
-  holderLoadState: HolderLoadState;
-  personalities: WalletPersonalityPreview[];
-  tokenFlowSummaryV2?: TokenFlowSummaryV2 | null;
+  holderIntelligenceMatrix: HolderIntelligenceProfile[];
+  holderIntelligenceSummary: HolderIntelligenceSummary | null;
+  novaConviction: NovaConvictionResult | null;
   tokenIntelligence: TokenIntelligenceData | null;
-  unifiedAnalysis: UnifiedTokenAnalysisData | null;
-  walletFlowV2Results?: WalletFlowV2Result[];
   walletRows: WalletRow[];
-}): WalletFlowModel {
-  const deep = conviction?.deepBehavior;
-  const deepSummary = deep?.summary;
-  const hasDeepBehavior = Boolean(deep?.enabled && deep.walletResults.length > 0);
-  const hasPartialInput =
-    holderLoadState === "error" ||
-    conviction?.status === "partial" ||
-    Boolean(unifiedAnalysis?.modules && Object.values(unifiedAnalysis.modules).some(
-      (module) => module?.status === "failed" || module?.status === "skipped"
-    )) ||
-    Boolean(conviction?.mapperWarnings.length);
-
-  if (tokenFlowSummaryV2 && (walletFlowV2Results?.length || 0) > 0) {
-    const contributors = (walletFlowV2Results || [])
-      .map((result) => ({
-        address: result.walletAddress,
-        displayAddress: shortInsiderWalletAddress(result.walletAddress),
-        ownership: `${result.ownershipPercentage.toFixed(2)}%`,
-        accumulationPressure: result.accumulationScore,
-        distributionPressure: result.distributionScore,
-        rotationRisk: result.rotationScore,
-        netFlowBiasScore: result.netFlowBiasScore,
-        confidenceScore: result.flowConfidenceScore,
-        flowLabel: result.flowDirection,
-        pressureScore: Math.max(
-          result.weightedAccumulationImpact,
-          result.weightedDistributionImpact,
-          result.weightedRotationImpact,
-          result.weightedDormancyImpact
-        ),
-        dataQuality:
-          result.missingEvidence.length > 0
-            ? `${result.flowConfidenceScore}/100 confidence`
-            : "Complete V2 inputs",
-      }))
-      .sort((a, b) => b.pressureScore - a.pressureScore)
-      .slice(0, 10);
-    return {
-      accumulationPressure: tokenFlowSummaryV2.accumulationPressure,
-      distributionPressure: tokenFlowSummaryV2.distributionPressure,
-      rotationRisk: tokenFlowSummaryV2.rotationPressure,
-      dormancyPressure: tokenFlowSummaryV2.dormancyPressure,
-      netFlowBias: tokenFlowSummaryV2.netFlowBias,
-      confidenceScore: tokenFlowSummaryV2.flowConfidence,
-      confidenceLabel: scoreToConfidenceLabel(tokenFlowSummaryV2.flowConfidence),
-      dominantFlow: tokenFlowSummaryV2.dominantFlow,
-      contributors,
-      insights: buildWalletFlowInsights({
-        analyzedWallets: tokenFlowSummaryV2.analyzedWallets,
-        contributors,
-        dominantFlow: tokenFlowSummaryV2.dominantFlow,
-        netFlowBias: tokenFlowSummaryV2.netFlowBias,
-      }),
-      hasDeepBehavior,
-      hasPartialInput,
-    };
-  }
-  const profileMap = new Map(
-    (behaviorPreview?.profiles || []).map((profile) => [
-      normalizeFlowAddress(profile.walletAddress || profile.address || profile.ownerAddress),
-      profile,
-    ])
-  );
-  const personalityMap = new Map(
-    personalities.map((personality) => [
-      normalizeFlowAddress(personality.walletAddress),
-      personality,
-    ])
-  );
-  const deepMap = new Map(
-    (deep?.walletResults || []).map((result) => [
-      normalizeFlowAddress(result.walletAddress),
-      result,
-    ])
-  );
-  const convictionBreakdownMap = new Map(
-    (conviction?.walletBreakdowns || []).map((breakdown) => [
-      normalizeFlowAddress(breakdown.address),
-      breakdown,
-    ])
-  );
-
-  const contributors = walletRows.slice(0, 25).map((row) => {
-    const address = walletFlowAddress(row);
-    const key = normalizeFlowAddress(address);
-    const profile = profileMap.get(key);
-    const personality = personalityMap.get(key);
-    const deepResult = deepMap.get(key);
-    const breakdown = convictionBreakdownMap.get(key);
-    const activityScore =
-      profile?.activityVelocityScore ??
-      profile?.activityScore ??
-      personality?.personalityScores.activity ??
-      breakdown?.scores.activity;
-    const rotationRisk =
-      deepResult?.rotationBehaviorRisk ??
-      personality?.personalityScores.rotation ??
-      breakdown?.scores.rotationRisk;
-    const accumulationPressure = deepResult?.accumulationPressure;
-    const distributionPressure = deepResult?.distributionPressure;
-    const ownership = readPercentage(row.ownershipPercentage);
-    const label = deriveWalletFlowLabel({
-      activityScore,
-      accumulationPressure,
-      distributionPressure,
-      profile,
-      rotationRisk,
-    });
-    const pressureScore =
-      Math.max(
-        accumulationPressure ?? 0,
-        distributionPressure ?? 0,
-        rotationRisk ?? 0,
-        activityScore ?? 0,
-        profile?.dormancyRiskScore ?? 0
-      ) + ownership * 2;
-
-    return {
-      address,
-      displayAddress: shortInsiderWalletAddress(address || row.wallet),
-      ownership: row.ownershipPercentage || "N/A",
-      accumulationPressure,
-      distributionPressure,
-      rotationRisk,
-      activityScore,
-      flowLabel: label,
-      pressureScore,
-      dataQuality: deepResult?.dataQuality.label || profile?.dataQuality,
-    };
+}): HolderBehaviorModel {
+  const holderAlpha = readRecord(novaConviction?.moduleSummaries?.holderAlpha);
+  const topWallets = readRecordArray(holderAlpha?.topWalletsByAlphaV3);
+  const bottomWallets = readRecordArray(holderAlpha?.bottomWalletsByAlphaV3);
+  const holderWallets = [...topWallets, ...bottomWallets];
+  const analyzedHolders =
+    holderIntelligenceSummary?.analyzedHolders ||
+    numberField(holderAlpha, "analyzedWalletCount") ||
+    tokenIntelligence?.analyzedWallets ||
+    walletRows.length ||
+    null;
+  const holderQuality =
+    novaConviction?.scores.holderAlpha ??
+    numberField(holderAlpha, "score") ??
+    holderIntelligenceSummary?.averageHolderScore ??
+    tokenIntelligence?.scores.holderQualityScore ??
+    null;
+  const entryDiscipline = averageRecordNumbers(holderWallets, "entryDisciplineV3");
+  const exitDiscipline = averageRecordNumbers(holderWallets, "exitDisciplineV3");
+  const consistency = averageRecordNumbers(holderWallets, "consistencyV3");
+  const rotationQuality = averageRecordNumbers(holderWallets, "rotationQualityV3");
+  const behaviorConfidence =
+    numberField(holderAlpha, "confidenceScore") ??
+    holderIntelligenceSummary?.averageConfidence ??
+    conviction?.dataConfidence.score ??
+    null;
+  const contributors = buildHolderBehaviorContributors({
+    holderWallets,
   });
-
-  const confidenceScore =
-    deep?.walletResults.length
-      ? Math.round(
-          averageNumbers([
-            conviction?.dataConfidence.score,
-            behaviorPreview?.summary.averageDataConfidence,
-            behaviorPreview?.summary.reliabilityAverage,
-            ...deep.walletResults.map((result) => result.dataQuality.score),
-          ])
-        )
-      : conviction?.dataConfidence.score ??
-        tokenIntelligence?.scores.reliabilityScore ??
-        behaviorPreview?.summary.averageDataConfidence;
-  const confidenceLabel =
-    conviction?.dataConfidence.label ||
-    tokenIntelligence?.thesis.confidenceLabel ||
-    scoreToConfidenceLabel(confidenceScore);
-  const accumulationPressure = deepSummary?.averageAccumulationPressure;
-  const distributionPressure = deepSummary?.averageDistributionPressure;
-  const rotationRisk =
-    deepSummary?.averageRotationBehaviorRisk ?? conviction?.subScores.rotationRisk;
-  const verdict = deriveWalletFlowVerdict({
-    accumulationPressure,
-    distributionPressure,
-    hasDeepBehavior,
-    rotationRisk,
+  const profileMetrics = buildHolderBehaviorProfileMetrics({
+    contributors,
+    holderAlpha,
+    holderIntelligenceMatrix,
   });
+  const distributionRows = buildHolderBehaviorDistribution(profileMetrics);
+  const dominantBehavior = deriveHolderDominantBehavior(distributionRows);
+
   return {
-    accumulationPressure,
-    distributionPressure,
-    rotationRisk,
-    dormancyPressure: behaviorPreview?.summary.averageDormancyRisk,
-    netFlowBias:
-      typeof accumulationPressure === "number" && typeof distributionPressure === "number"
-        ? Math.round(accumulationPressure - distributionPressure)
-        : undefined,
-    confidenceScore:
-      typeof confidenceScore === "number" && Number.isFinite(confidenceScore)
-        ? Math.round(confidenceScore)
-        : undefined,
-    confidenceLabel,
-    dominantFlow: hasDeepBehavior ? verdict.title : undefined,
-    contributors: contributors
-      .sort((a, b) => b.pressureScore - a.pressureScore)
-      .slice(0, 10),
-    insights: buildWalletFlowInsights({
-      analyzedWallets: walletRows.length || deepSummary?.analyzedWallets,
-      contributors,
-      dominantFlow: hasDeepBehavior ? verdict.title : undefined,
-      netFlowBias:
-        typeof accumulationPressure === "number" && typeof distributionPressure === "number"
-          ? Math.round(accumulationPressure - distributionPressure)
-          : undefined,
+    analyzedHolders,
+    contributors,
+    distributionRows,
+    dominantBehavior,
+    hasPartialInput:
+      Boolean(conviction?.mapperWarnings.length) ||
+      Boolean(conviction?.warnings.length) ||
+      Boolean(behaviorPreview?.summary.unavailableProfiles),
+    primaryScores: [
+      {
+        detail: "Measures overall quality of analyzed holders.",
+        label: "Holder Quality",
+        value: holderQuality,
+      },
+      {
+        detail: "How intelligently holders entered positions.",
+        label: "Entry Discipline",
+        value: entryDiscipline,
+      },
+      {
+        detail: "How intelligently holders realize profits.",
+        label: "Exit Discipline",
+        value: exitDiscipline,
+      },
+      {
+        detail: "Measures excessive rotation versus conviction.",
+        label: "Rotation Quality",
+        value: rotationQuality,
+      },
+      {
+        detail: "Behavior stability across wallets.",
+        label: "Consistency",
+        value: consistency,
+      },
+      {
+        detail: "Confidence in behavioral observations.",
+        label: "Behavior Confidence",
+        value: behaviorConfidence,
+      },
+    ],
+    profileMetrics,
+    summary: buildHolderBehaviorSummary({
+      consistency,
+      dominantBehavior,
+      holderQuality,
+      profileMetrics,
+      rotationQuality,
     }),
-    hasDeepBehavior,
-    hasPartialInput,
   };
 }
 
-function deriveWalletFlowVerdict({
-  accumulationPressure,
-  distributionPressure,
-  hasDeepBehavior,
-  rotationRisk,
+function averageRecordNumbers(rows: Array<Record<string, unknown>>, key: string) {
+  const values = rows
+    .map((row) => numberField(row, key))
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (!values.length) return null;
+  return Math.round(values.reduce((total, value) => total + value, 0) / values.length);
+}
+
+function buildHolderBehaviorContributors({
+  holderWallets,
 }: {
-  accumulationPressure?: number;
-  distributionPressure?: number;
-  hasDeepBehavior: boolean;
-  rotationRisk?: number;
+  holderWallets: Array<Record<string, unknown>>;
 }) {
-  if (!hasDeepBehavior) {
-    return {
-      title: "Insufficient flow data",
-      copy: "Transfer-derived wallet flow data is not available for this token, so NovaOS is not inferring accumulation or distribution pressure.",
-    };
-  }
+  return holderWallets
+    .map((wallet) => {
+      const address = String(wallet.wallet || "");
+      const walletAlphaScore = numberField(wallet, "walletAlphaScore");
+      const ownershipPercent = numberField(wallet, "ownershipPercent");
+      if (!address || walletAlphaScore === null || ownershipPercent === null) {
+        return null;
+      }
 
-  const accumulation = accumulationPressure ?? 0;
-  const distribution = distributionPressure ?? 0;
-  const rotation = rotationRisk ?? 0;
-  const spread = Math.abs(accumulation - distribution);
-
-  if (rotation >= 70 && rotation >= Math.max(accumulation, distribution) - 5) {
-    return {
-      title: "Rotation-heavy",
-      copy: "Rotation risk is elevated across analyzed wallets, so current movement looks more rotation-heavy than stable.",
-    };
-  }
-  if (spread < 12) {
-    return {
-      title: "Mixed flow",
-      copy: "Flow is mixed because accumulation and distribution signals are close in the available wallet-transfer data.",
-    };
-  }
-  if (accumulation > distribution) {
-    return {
-      title: "Accumulation dominant",
-      copy: "Available wallet behavior suggests accumulation pressure is stronger than distribution pressure.",
-    };
-  }
-  return {
-    title: "Distribution dominant",
-    copy: "Available wallet behavior suggests distribution pressure is stronger than accumulation pressure.",
-  };
+      return {
+        address,
+        behaviorLabel: holderAlphaBehaviorLabel(walletAlphaScore),
+        contribution: ((walletAlphaScore - 50) * ownershipPercent) / 10,
+        displayAddress: shortInsiderWalletAddress(address),
+        note: holderAlphaContributorNote(wallet),
+        quality: walletAlphaScore,
+      };
+    })
+    .filter((row): row is HolderBehaviorContributor => Boolean(row))
+    .sort((left, right) => Math.abs(right.contribution) - Math.abs(left.contribution))
+    .slice(0, 10);
 }
 
-function deriveWalletFlowLabel({
-  activityScore,
-  accumulationPressure,
-  distributionPressure,
-  profile,
-  rotationRisk,
-}: {
-  activityScore?: number;
-  accumulationPressure?: number;
-  distributionPressure?: number;
-  profile?: WalletBehaviorProfile;
-  rotationRisk?: number;
-}): FlowLabel {
-  const hasTransferPressure =
-    typeof accumulationPressure === "number" ||
-    typeof distributionPressure === "number";
-
-  if ((profile?.dormancyRiskScore ?? 0) >= 70 || profile?.behaviorClass === "dormant whale") {
-    return "Dormant";
-  }
-  if ((rotationRisk ?? 0) >= 70) return "Rotating";
-  if (hasTransferPressure && (accumulationPressure ?? 0) >= (distributionPressure ?? 0) + 15) {
-    return "Accumulating";
-  }
-  if (hasTransferPressure && (distributionPressure ?? 0) >= (accumulationPressure ?? 0) + 15) {
-    return "Distributing";
-  }
-  if ((activityScore ?? 0) >= 70) return "Stable Holder";
-  return "Unknown";
+function holderAlphaBehaviorLabel(score: number) {
+  if (score >= 70) return "Conviction Holder";
+  if (score >= 60) return "Strong Holder";
+  if (score >= 50) return "Neutral Holder";
+  if (score >= 40) return "Weak Holder";
+  return "High Risk Holder";
 }
 
-function buildWalletFlowInsights({
-  analyzedWallets,
+function holderAlphaContributorNote(wallet: Record<string, unknown>) {
+  if (wallet.isFallback === true) return "Fallback";
+  if (wallet.analysisDepth === "deep") return "Deep analysis";
+  return "Light analysis";
+}
+
+function buildHolderBehaviorProfileMetrics({
   contributors,
-  dominantFlow,
-  netFlowBias,
+  holderAlpha,
+  holderIntelligenceMatrix,
 }: {
-  analyzedWallets?: number;
-  contributors: WalletFlowContributor[];
-  dominantFlow?: string;
-  netFlowBias?: number;
-}): WalletFlowInsight[] {
-  const largestContributor = contributors[0];
-  const holderCount =
-    typeof analyzedWallets === "number" && Number.isFinite(analyzedWallets) && analyzedWallets > 0
-      ? analyzedWallets
-      : undefined;
-  const marketPosture =
-    typeof netFlowBias === "number" && Number.isFinite(netFlowBias)
-      ? netFlowBias > 0
-        ? "Accumulation-biased"
-        : netFlowBias < 0
-        ? "Distribution-biased"
-        : "Balanced"
-      : undefined;
+  contributors: HolderBehaviorContributor[];
+  holderAlpha: Record<string, unknown> | null;
+  holderIntelligenceMatrix: HolderIntelligenceProfile[];
+}): HolderBehaviorMetric[] {
+  const total = holderIntelligenceMatrix.length || contributors.length;
+  const percentFromCount = (count: number) =>
+    total ? Math.round((count / total) * 100) : null;
+  const countByLabel = (labels: string[]) =>
+    contributors.filter((contributor) => labels.includes(contributor.behaviorLabel)).length;
 
   return [
     {
-      title: "Dominant Behavior",
-      value: dominantFlow || "Unavailable",
-      detail: dominantFlow ? "Derived from loaded wallet-flow signals." : undefined,
+      label: "Conviction Holders",
+      value:
+        numberField(holderAlpha, "goodOrBetterOwnershipPercent") ??
+        percentFromCount(countByLabel(["Conviction Holder"])),
     },
     {
-      title: "Largest Influence",
-      value: largestContributor?.displayAddress || "Unavailable",
-      detail: largestContributor
-        ? `${largestContributor.ownership} ownership - ${largestContributor.flowLabel}`
-        : undefined,
+      label: "Weak Holders",
+      value:
+        numberField(holderAlpha, "weakOrToxicOwnershipPercent") ??
+        percentFromCount(countByLabel(["Weak Holder"])),
     },
     {
-      title: "Holder Participation",
-      value: holderCount ? `${holderCount} holder${holderCount === 1 ? "" : "s"}` : "Unavailable",
-      detail: holderCount ? "Observed in the loaded holder-flow sample." : undefined,
+      label: "Smart Holders",
+      value:
+        numberField(holderAlpha, "smartLikeOwnershipPercent") ??
+        percentFromCount(countByLabel(["Smart Holder"])),
     },
     {
-      title: "Market Posture",
-      value: marketPosture || "Unavailable",
-      detail:
-        typeof netFlowBias === "number" && Number.isFinite(netFlowBias)
-          ? `Net bias ${formatFlowBias(netFlowBias)}`
-          : undefined,
+      label: "Fresh Wallets",
+      value:
+        numberField(holderAlpha, "freshLikeOwnershipPercent") ??
+        percentFromCount(
+          holderIntelligenceMatrix.filter((holder) =>
+            holder.holderClass === "Fresh High-Ownership Wallet"
+          ).length
+        ),
     },
-  ];
+    {
+      label: "Legacy Wallets",
+      value: percentFromCount(
+        holderIntelligenceMatrix.filter((holder) =>
+          ["Core Conviction Holder", "Dormant Holder", "Concentrated Whale"].includes(holder.holderClass)
+        ).length
+      ),
+    },
+  ].filter((metric) => metric.value !== null);
 }
 
-function TopFlowContributorsTable({
-  contributors,
+function buildHolderBehaviorDistribution(profileMetrics: HolderBehaviorMetric[]) {
+  const metricValue = (label: string) =>
+    profileMetrics.find((metric) => metric.label === label)?.value ?? null;
+  const conviction = metricValue("Conviction Holders");
+  const smart = metricValue("Smart Holders");
+  const weak = metricValue("Weak Holders");
+  const fresh = metricValue("Fresh Wallets");
+  const speculative =
+    typeof fresh === "number" && typeof weak === "number"
+      ? Math.max(0, Math.min(100, Math.round((fresh + weak) * 0.35)))
+      : null;
+  const known = [conviction, smart, weak, speculative].reduce<number>(
+    (total, value) => total + (typeof value === "number" ? value : 0),
+    0
+  );
+  const neutral = Math.max(0, Math.min(100, 100 - known));
+
+  return [
+    { label: "Conviction", value: conviction },
+    { label: "Smart", value: smart },
+    { label: "Neutral", value: Number.isFinite(neutral) ? neutral : null },
+    { label: "Weak", value: weak },
+    { label: "Speculative", value: speculative },
+  ].filter((metric) => metric.value !== null);
+}
+
+function deriveHolderDominantBehavior(rows: HolderBehaviorMetric[]) {
+  const sorted = [...rows]
+    .filter((row) => typeof row.value === "number")
+    .sort((left, right) => (right.value ?? 0) - (left.value ?? 0));
+  const dominant = sorted[0];
+  if (!dominant) return "Mixed Holder Base";
+  if (dominant.label === "Conviction") return "Conviction Dominated";
+  if (dominant.label === "Weak") return "Weak Holder Dominated";
+  if (dominant.label === "Speculative") return "Speculative Rotation";
+  if (dominant.label === "Smart") return "Smart Money Presence";
+  return "Mixed Holder Base";
+}
+
+function buildHolderBehaviorSummary({
+  consistency,
+  dominantBehavior,
+  holderQuality,
+  profileMetrics,
+  rotationQuality,
 }: {
-  contributors: WalletFlowContributor[];
+  consistency: number | null;
+  dominantBehavior: string;
+  holderQuality: number | null;
+  profileMetrics: HolderBehaviorMetric[];
+  rotationQuality: number | null;
 }) {
-  const gridClass =
-    "grid-cols-[minmax(220px,1.55fr)_minmax(110px,0.72fr)_minmax(150px,0.9fr)_minmax(120px,0.72fr)]";
+  const weak = profileMetrics.find((metric) => metric.label === "Weak Holders")?.value;
+  const conviction = profileMetrics.find((metric) => metric.label === "Conviction Holders")?.value;
+  const qualityText =
+    typeof holderQuality === "number" && holderQuality >= 60
+      ? "Holder quality is supportive"
+      : "Wallet quality remains the primary limiter of conviction";
+  const consistencyText =
+    typeof consistency === "number" && consistency >= 55
+      ? "behavior is relatively stable"
+      : "behavior stability remains limited";
+  const rotationText =
+    typeof rotationQuality === "number" && rotationQuality >= 55
+      ? "rotation quality is acceptable"
+      : "rotation behavior remains elevated";
+
+  return `${dominantBehavior}. ${qualityText}; ${consistencyText} and ${rotationText}. Conviction holders represent ${formatPercentValue(conviction)} while weak holders represent ${formatPercentValue(weak)} of observed behavior.`;
+}
+
+function BehaviorScoreCard({ score }: { score: HolderBehaviorScore }) {
+  return (
+    <div className="min-h-[132px] rounded-2xl nova-card-inner p-4">
+      <p className="text-3xl font-semibold tracking-[-0.06em] text-[color:var(--nova-text)]">
+        {formatNullableScore(score.value)}
+      </p>
+      <p className="mt-2 text-[10px] uppercase tracking-[0.16em] text-[color:var(--nova-text-soft)]">
+        {score.label}
+      </p>
+      <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
+        {score.detail}
+      </p>
+    </div>
+  );
+}
+
+function BehaviorProfilePanel({ metrics }: { metrics: HolderBehaviorMetric[] }) {
+  return (
+    <BehaviorPanel title="Behavior Profile">
+      <div className="space-y-3">
+        {metrics.map((metric) => (
+          <BehaviorBarRow key={metric.label} metric={metric} />
+        ))}
+      </div>
+    </BehaviorPanel>
+  );
+}
+
+function BehaviorDistributionPanel({ rows }: { rows: HolderBehaviorMetric[] }) {
+  return (
+    <BehaviorPanel title="Behavior Distribution">
+      <div className="space-y-3">
+        {rows.map((metric) => (
+          <BehaviorBarRow key={metric.label} metric={metric} />
+        ))}
+      </div>
+    </BehaviorPanel>
+  );
+}
+
+function BehaviorPanel({
+  children,
+  title,
+}: {
+  children: React.ReactNode;
+  title: string;
+}) {
+  return (
+    <section className="rounded-[2rem] nova-card-inner p-4">
+      <p className="text-xs uppercase tracking-[0.22em] text-[color:var(--nova-accent-soft)]">
+        {title}
+      </p>
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+function BehaviorBarRow({ metric }: { metric: HolderBehaviorMetric }) {
+  const value =
+    typeof metric.value === "number" && Number.isFinite(metric.value)
+      ? Math.max(0, Math.min(100, metric.value))
+      : null;
 
   return (
-    <section className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.03] backdrop-blur-2xl">
-      <div className="flex flex-col gap-2 border-b border-white/[0.07] p-4 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <span className="font-medium text-[color:var(--nova-text-soft)]">{metric.label}</span>
+        <span className="font-mono text-[color:var(--nova-text-soft)]">
+          {value === null ? "N/A" : `${Math.round(value)}%`}
+        </span>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full nova-card-inner">
+        <div
+          className="h-full rounded-full bg-[rgba(127,144,150,0.68)] shadow-[0_0_12px_rgba(83,104,120,0.18)]"
+          style={{ width: `${value ?? 0}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function DominantBehaviorCard({ model }: { model: HolderBehaviorModel }) {
+  return (
+    <section className="rounded-[2rem] nova-card-inner p-4">
+      <p className="text-xs uppercase tracking-[0.22em] text-[color:var(--nova-accent-soft)]">
+        Dominant Behavior
+      </p>
+      <p className="mt-4 text-2xl font-semibold tracking-[-0.055em] text-[color:var(--nova-text)]">
+        {model.dominantBehavior}
+      </p>
+      <p className="mt-2 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
+        Derived from analyzed holder classes and contribution quality.
+      </p>
+    </section>
+  );
+}
+
+function BehaviorSummaryCard({ summary }: { summary: string }) {
+  return (
+    <section className="rounded-[2rem] nova-card-inner p-4">
+      <p className="text-xs uppercase tracking-[0.22em] text-[color:var(--nova-accent-soft)]">
+        Behavior Summary
+      </p>
+      <p className="mt-4 text-sm leading-relaxed text-[color:var(--nova-text-soft)]">
+        {summary}
+      </p>
+    </section>
+  );
+}
+
+function TopConvictionContributorsTable({
+  contributors,
+}: {
+  contributors: HolderBehaviorContributor[];
+}) {
+  const gridClass =
+    "grid-cols-[minmax(170px,1.2fr)_minmax(150px,0.9fr)_minmax(110px,0.65fr)_minmax(90px,0.55fr)_minmax(220px,1.35fr)]";
+
+  return (
+    <section className="overflow-hidden rounded-[2rem] nova-card-inner backdrop-blur-2xl">
+      <div className="flex flex-col gap-2 border-b border-[color:var(--nova-border)] p-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-xs uppercase tracking-[0.24em] text-cyan-100/42">
-            Top Flow Contributors
+          <p className="text-xs uppercase tracking-[0.24em] text-[color:var(--nova-accent-soft)]">
+            Top Conviction Contributors
           </p>
-          <h2 className="mt-2 text-xl font-semibold tracking-[-0.045em] text-white/86">
-            Wallets contributing most to flow pressure
+          <h2 className="mt-2 text-xl font-semibold tracking-[-0.045em] text-[color:var(--nova-text)]">
+            Holders contributing most to the final conviction reading.
           </h2>
         </div>
-        <p className="text-xs text-white/30">Top {contributors.length || 0} by weighted pressure</p>
+        <p className="text-xs text-[color:var(--nova-text-muted)]">
+          Top {contributors.length || 0}
+        </p>
       </div>
 
       {contributors.length === 0 ? (
-        <WalletFlowStateCard
-          title="No holder rows loaded."
-          detail="The contributors table appears after holder rows are available for the selected token."
+        <HolderBehaviorStateCard
+          title="No holder contributors loaded."
+          detail="Contributor rows appear after holder behavior evidence is available for the selected token."
         />
       ) : (
         <div className="overflow-x-auto">
-        <div className={`grid min-w-[720px] ${gridClass} gap-3 ${terminalTableHeaderClass}`}>
+          <div className={`grid min-w-[920px] ${gridClass} gap-3 ${terminalTableHeaderClass}`}>
             <span>Wallet</span>
-            <span className="text-center">Ownership</span>
-            <span className="text-center">Direction</span>
-            <span className="text-center">Net Bias</span>
+            <span>Behavior Label</span>
+            <span className="text-center">Contribution</span>
+            <span className="text-center">Quality</span>
+            <span>Notes</span>
           </div>
           <div>
             {contributors.map((contributor) => (
               <div
                 key={contributor.address || contributor.displayAddress}
-                className={`grid min-h-[58px] min-w-[720px] ${gridClass} items-center gap-3 ${terminalRowClass}`}
+                className={`grid min-h-[52px] min-w-[920px] ${gridClass} items-center gap-3 ${terminalRowClass}`}
               >
-                <div className="min-w-0">
-                  <p className="truncate font-mono text-white/74">
-                    {contributor.displayAddress}
-                  </p>
-                  <p className="mt-0.5 truncate text-[11px] text-white/30">
-                    {contributor.dataQuality ? `${contributor.dataQuality} data` : "Loaded holder row"}
-                  </p>
-                </div>
-                <span className="text-center tabular-nums text-cyan-100/66">
-                  {contributor.ownership}
+                <p className="truncate font-mono text-[color:var(--nova-text-soft)]">
+                  {contributor.displayAddress}
+                </p>
+                <span className="truncate text-[color:var(--nova-text-soft)]">
+                  {contributor.behaviorLabel}
                 </span>
-                <div className="flex justify-center">
-                  <WalletFlowLabelBadge label={contributor.flowLabel} />
-                </div>
-                <span className="text-center text-sm font-medium tabular-nums text-white/64">
-                  {formatFlowBias(contributor.netFlowBiasScore)}
+                <span
+                  className={`text-center font-mono text-sm tabular-nums ${
+                    contributor.contribution >= 0
+                      ? "text-[color:var(--nova-success)]"
+                      : "text-[color:var(--nova-warning)]"
+                  }`}
+                >
+                  {formatContribution(contributor.contribution)}
                 </span>
+                <span className="text-center font-mono text-sm tabular-nums text-[color:var(--nova-text-soft)]">
+                  {formatNullableScore(contributor.quality)}
+                </span>
+                <p className="truncate text-xs text-[color:var(--nova-text-muted)]">
+                  {contributor.note}
+                </p>
               </div>
             ))}
           </div>
@@ -9424,43 +11349,7 @@ function TopFlowContributorsTable({
   );
 }
 
-function WalletFlowSummaryCard({
-  detail,
-  label,
-  value,
-}: {
-  detail: string;
-  label: string;
-  value: React.ReactNode;
-}) {
-  return (
-    <div className="min-h-[126px] rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-      <p className="text-[10px] uppercase tracking-[0.16em] text-white/32">{label}</p>
-      <p className="mt-3 text-2xl font-semibold tracking-[-0.055em] text-white/86">
-        {value}
-      </p>
-      <p className="mt-3 text-xs leading-relaxed text-white/34">{detail}</p>
-    </div>
-  );
-}
-
-function WalletFlowInsightCard({ insight }: { insight: WalletFlowInsight }) {
-  return (
-    <div className="min-h-[128px] rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-      <p className="text-[10px] uppercase tracking-[0.16em] text-white/32">
-        {insight.title}
-      </p>
-      <p className="mt-3 truncate text-xl font-semibold tracking-[-0.045em] text-white/84">
-        {insight.value}
-      </p>
-      {insight.detail && (
-        <p className="mt-3 text-xs leading-relaxed text-white/34">{insight.detail}</p>
-      )}
-    </div>
-  );
-}
-
-function WalletFlowNotice({
+function HolderBehaviorNotice({
   detail,
   title,
   tone = "default",
@@ -9473,17 +11362,17 @@ function WalletFlowNotice({
     <div
       className={`rounded-2xl border p-4 ${
         tone === "warning"
-          ? "border-amber-100/14 bg-amber-100/[0.035]"
-          : "border-white/10 bg-white/[0.03]"
+          ? "border-[color:var(--nova-border)] bg-[rgba(83,104,120,0.065)]"
+          : "border-[color:var(--nova-border)] nova-card-inner"
       }`}
     >
-      <p className="text-sm font-medium text-white/76">{title}</p>
-      <p className="mt-1 text-xs leading-relaxed text-white/34">{detail}</p>
+      <p className="text-sm font-medium text-[color:var(--nova-text)]">{title}</p>
+      <p className="mt-1 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">{detail}</p>
     </div>
   );
 }
 
-function WalletFlowStateCard({
+function HolderBehaviorStateCard({
   detail,
   pulse = false,
   title,
@@ -9492,12 +11381,10 @@ function WalletFlowStateCard({
   pulse?: boolean;
   title: string;
 }) {
-  return (
-    <TerminalStatePanel detail={detail} pulse={pulse} title={title} />
-  );
+  return <TerminalStatePanel detail={detail} pulse={pulse} title={title} />;
 }
 
-function FlowTinyFact({
+function BehaviorTinyFact({
   label,
   value,
 }: {
@@ -9505,74 +11392,32 @@ function FlowTinyFact({
   value: React.ReactNode;
 }) {
   return (
-    <div className="min-w-0 rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2">
-      <p className="text-[9px] uppercase tracking-[0.14em] text-white/28">{label}</p>
-      <p className="mt-1 truncate text-xs font-medium text-white/68">{value}</p>
+    <div className="min-w-0 rounded-xl nova-card-inner px-3 py-2">
+      <p className="text-[9px] uppercase tracking-[0.14em] text-[color:var(--nova-text-muted)]">{label}</p>
+      <p className="mt-1 truncate text-xs font-medium text-[color:var(--nova-text-soft)]">{value}</p>
     </div>
   );
 }
 
-function WalletFlowLabelBadge({ label }: { label: FlowLabel }) {
-  const className =
-    label === "Accumulating"
-      ? "border-emerald-100/15 bg-emerald-100/[0.05] text-emerald-100/68"
-      : label === "Distributing"
-      ? "border-red-100/15 bg-red-100/[0.045] text-red-100/62"
-      : label === "Rotating"
-      ? "border-amber-100/15 bg-amber-100/[0.05] text-amber-100/66"
-      : label === "Dormant"
-      ? "border-white/10 bg-white/[0.035] text-white/46"
-      : label === "Stable Holder"
-      ? "border-cyan-100/12 bg-cyan-100/[0.045] text-cyan-100/70"
-      : "border-white/10 bg-white/[0.025] text-white/38";
-
-  return (
-    <span className={`inline-flex max-w-full justify-center rounded-full border px-3 py-1 text-xs ${className}`}>
-      <span className="truncate">{label}</span>
-    </span>
-  );
-}
-
-function formatFlowScore(value?: number) {
+function formatNullableScore(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value)
-    ? `${Math.round(value)}/100`
+    ? String(Math.round(value))
     : "N/A";
 }
 
-function formatFlowBias(value?: number) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "N/A";
-  const rounded = Math.round(value);
+function formatPercentValue(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${Math.round(value)}%`
+    : "N/A";
+}
+
+function formatContribution(value: number) {
+  const rounded = Number(value.toFixed(1));
   return rounded > 0 ? `+${rounded}` : String(rounded);
 }
 
-function scoreToConfidenceLabel(score?: number) {
-  if (typeof score !== "number" || !Number.isFinite(score)) return "Low";
-  if (score >= 75) return "High";
-  if (score >= 45) return "Medium";
-  return "Low";
-}
-
-function averageNumbers(values: Array<number | undefined>) {
-  const safeValues = values.filter(
-    (value): value is number => typeof value === "number" && Number.isFinite(value)
-  );
-  if (safeValues.length === 0) return 0;
-  return safeValues.reduce((sum, value) => sum + value, 0) / safeValues.length;
-}
-
-function walletFlowAddress(row: WalletRow) {
-  return (
-    row.fullAddress ||
-    row.walletAddress ||
-    row.ownerAddress ||
-    row.address ||
-    row.wallet ||
-    ""
-  );
-}
-
-function normalizeFlowAddress(value?: string) {
-  return (value || "").trim().toLowerCase();
+function cleanTokenSymbol(value: string) {
+  return value.replace(/^\$/, "") || "N/A";
 }
 
 function isProviderLimitMessage(value: string) {
@@ -9586,41 +11431,49 @@ function isProviderLimitMessage(value: string) {
 }
 
 function InsiderScanDashboard({
-  behaviorPreview,
-  clusterData,
   conviction,
   convictionError,
   convictionLoadState,
-  holderIntelligenceMatrix,
   holderError,
   holderLoadState,
-  insiderRiskV2,
-  onSelectWallet,
+  novaConviction,
   token,
   tokenData,
-  tokenIntelligence,
   walletRows,
 }: {
-  behaviorPreview: WalletBehaviorPreviewData | null;
-  clusterData: WalletClusterData | null;
   conviction: ExplainableConvictionData | null;
   convictionError: string;
   convictionLoadState: HolderLoadState;
-  holderIntelligenceMatrix: HolderIntelligenceProfile[];
   holderError: string;
   holderLoadState: HolderLoadState;
-  insiderRiskV2: InsiderRiskV2Result;
-  onSelectWallet: (row: WalletRow, profile?: WalletBehaviorProfile) => void;
+  novaConviction: NovaConvictionResult | null;
   token: string;
   tokenData: TokenResult;
-  tokenIntelligence: TokenIntelligenceData | null;
   walletRows: WalletRow[];
 }) {
-  const bundleDetection = conviction?.bundleDetection;
+  const moduleSummaries = readRecord(novaConviction?.moduleSummaries);
+  const riskStats = readRecord(moduleSummaries?.riskStats);
+  const riskPressure = readRecord(moduleSummaries?.riskPressure);
+  const riskSubScores = readRecord(riskPressure?.subScores);
+  const holderAlpha = readRecord(moduleSummaries?.holderAlpha);
+  const holderAlphaDepth =
+    readRecord(novaConviction?.holderAlphaDepth) ??
+    readRecord(holderAlpha?.holderAlphaDepth);
+  const holderRowsV3 = buildInsiderHolderRows(novaConviction, walletRows);
+  const riskGroups = buildInsiderRiskGroups({
+    holderAlpha,
+    riskStats,
+  });
+  const hasNovaRiskData = Boolean(novaConviction || riskStats || riskPressure || holderAlpha);
+  const riskModel = buildInsiderRiskModel({
+    novaConviction,
+    riskPressure,
+    riskStats,
+  });
   const isLoading =
     convictionLoadState === "loading" || holderLoadState === "loading";
   const hasToken = Boolean(tokenData.tokenAddress);
-  const hasRiskData = Boolean(conviction);
+  const hasRiskData = hasNovaRiskData || Boolean(conviction);
   const isPartial =
     conviction?.status === "partial" ||
     Boolean(convictionError) ||
@@ -9642,100 +11495,994 @@ function InsiderScanDashboard({
   return (
     <div className="mx-auto max-w-[1680px] space-y-4">
       <TerminalSectionHeader
-        badge="Behavioral inference only"
         eyebrow="Insider Scan"
-        subtitle="A simplified read on holder concentration, coordination pressure and evidence quality from loaded NovaOS intelligence."
-        title="Holder base structural safety"
+        subtitle="Loaded holder, ownership, and GMGN risk evidence summarized into structural risk signals."
+        title="Structural Holder Intelligence"
       >
-          <div className="flex items-center gap-3 self-center rounded-2xl border border-white/10 bg-black/25 px-4 py-3 lg:min-w-[248px]">
-            <TokenAvatar
-              logoUrl={resolveTokenLogo(tokenData)}
-              sizeClass="h-11 w-11"
-              token={token}
-            />
-            <div>
-              <p className="text-xs uppercase tracking-[0.18em] text-white/32">
-                Token review
+        <div className="flex items-center gap-3 self-center rounded-2xl nova-card-inner px-4 py-3 lg:min-w-[330px]">
+          <TokenAvatar
+            logoUrl={resolveTokenLogo(tokenData)}
+            sizeClass="h-12 w-12"
+            token={token}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-3">
+              <p className="truncate text-sm font-medium text-[color:var(--nova-text)]">
+                ${cleanTokenSymbol(tokenData.symbol || token)}
               </p>
-              <p className="mt-1 text-sm font-medium text-white/78">
-                {token} Structural Risk Review
-              </p>
+              <span className="rounded-full nova-card-inner px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-[color:var(--nova-text-soft)]">
+                {formatInsiderMode(novaConviction?.analysisMode ?? String(holderAlpha?.analysisMode || ""))}
+              </span>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-[color:var(--nova-text-muted)]">
+              <span>Chain: {chainLabel(tokenData.chain)}</span>
+              <span>
+                Analyzed:{" "}
+                {formatInsiderCount(
+                  numberField(holderAlphaDepth, "analyzedWalletCount") ??
+                    numberField(holderAlpha, "analyzedWalletCount")
+                )}
+              </span>
             </div>
           </div>
+        </div>
       </TerminalSectionHeader>
 
       {isPartial && (
-        <div className="rounded-2xl border border-amber-100/12 bg-amber-100/[0.035] px-4 py-3 text-xs leading-relaxed text-amber-100/62">
+        <div className="rounded-2xl border border-[color:var(--nova-border)] bg-[rgba(83,104,120,0.065)] px-4 py-3 text-xs leading-relaxed text-[color:var(--nova-warning)]">
           Provider limit reached or live data unavailable. Cached or partial
           analysis may be shown.
         </div>
       )}
 
-      {!conviction ? (
+      {!hasNovaRiskData ? (
         <InsiderScanEmptyState
-          title="Insider Scan requires holder and conviction data."
-          detail="Analyze this token successfully to surface structural risk evidence. Holder facts may remain visible below when available."
+          title="Insider Scan requires loaded evidence."
+          detail="Analyze this token successfully to surface structural holder and risk pressure intelligence."
         />
       ) : (
         <>
-          <InsiderRiskV2Panel result={insiderRiskV2} />
+          <InsiderV3RiskPanel model={riskModel} />
 
           <section>
             <ForensicSectionHeading
               eyebrow="Evidence Review"
-              title="Why This Risk Level"
-              description="Only loaded holder, relationship, cluster and behavior evidence is shown."
+              title="Loaded Evidence"
+              description="A compact read of concentration, tagged risk, and holder quality."
             />
             <div className="mt-3 grid gap-3 xl:grid-cols-3">
-              <EvidenceCard
-                label="Concentration Evidence"
-                rows={buildConcentrationEvidence(
-                  walletRows,
-                  tokenIntelligence,
-                  behaviorPreview
-                )}
-              />
-              <EvidenceCard
-                label="Coordination Evidence"
-                rows={buildCoordinationEvidence(conviction, clusterData)}
-              />
-              <EvidenceCard
-                label="Behavior Evidence"
-                rows={buildBehaviorEvidence(conviction, behaviorPreview)}
-              />
+              {buildInsiderEvidenceCards({
+                holderAlpha,
+                riskStats,
+                riskSubScores,
+              }).map((card) => (
+                <InsiderEvidenceCard
+                  key={card.label}
+                  label={card.label}
+                  rows={card.rows}
+                />
+              ))}
             </div>
           </section>
 
-          <DetectedRiskGroups
-            bundleGroups={bundleDetection?.detectedGroups || []}
-            patterns={insiderRiskV2.detectedPatterns}
-          />
+          <InsiderRiskGroupGrid groups={riskGroups} />
         </>
       )}
 
-      <StableWalletIntelligenceTable
-        walletRows={walletRows}
-        behaviorProfiles={behaviorPreview?.profiles || []}
-        holderIntelligenceMatrix={holderIntelligenceMatrix}
-        loadState={holderLoadState}
+      <InsiderHolderDepthStats
+        holderAlpha={holderAlpha}
+        holderAlphaDepth={holderAlphaDepth}
+      />
+
+      <InsiderV3HolderTable
         error={holderError}
-        onSelectWallet={onSelectWallet}
+        loadState={holderLoadState}
+        rows={holderRowsV3}
       />
     </div>
   );
 }
 
+type InsiderRiskMetric = {
+  barValue: number | null;
+  label: string;
+  value: string;
+};
+
+type InsiderRiskModel = {
+  cleanBadges: string[];
+  label: string;
+  metrics: InsiderRiskMetric[];
+  score: number | null;
+};
+
+type InsiderEvidenceModel = {
+  label: string;
+  rows: string[];
+};
+
+type InsiderRiskGroupModel = {
+  exposure: string;
+  level: string;
+  text: string;
+  title: string;
+};
+
+type InsiderHolderRowV3 = {
+  analysisType: string;
+  behaviorLabel: string;
+  confidenceLevel: string;
+  explanations: string[];
+  labels: string[];
+  rank: number | null;
+  rawWallet: Record<string, unknown>;
+  rawMetrics: Record<string, unknown> | null;
+  score: number | null;
+  usdValue: number | null;
+  wallet: string;
+  ownershipPercent: number | null;
+};
+
+type InsiderWalletScoreMetric = {
+  barValue: number | null;
+  label: string;
+  value: string;
+};
+
+function buildInsiderRiskModel({
+  novaConviction,
+  riskPressure,
+  riskStats,
+}: {
+  novaConviction: NovaConvictionResult | null;
+  riskPressure: Record<string, unknown> | null;
+  riskStats: Record<string, unknown> | null;
+}): InsiderRiskModel {
+  const score =
+    numberField(riskPressure, "structuralRiskScore") ??
+    numberField(riskPressure, "riskPressureScore") ??
+    novaConviction?.risk.riskScore ??
+    null;
+  const insiderPercentage = numberField(riskStats, "insiderPercentage");
+  const insiderWalletCount = numberField(riskStats, "insiderWalletCount");
+  const bundlerPercentage = numberField(riskStats, "bundlerPercentage");
+  const bundlerWalletCount = numberField(riskStats, "bundlerWalletCount");
+  const top70SniperHoldPercentage = numberField(riskStats, "top70SniperHoldPercentage");
+  const sniperWalletCount = numberField(riskStats, "sniperWalletCount");
+  const freshWalletPercentage = numberField(riskStats, "freshWalletPercentage");
+  const phishingPercentage = numberField(riskStats, "phishingPercentage");
+  const top10HolderPercentage = numberField(riskStats, "top10HolderPercentage");
+  const holderCount = numberField(riskStats, "holderCount");
+  const devCreatorHold = maxFinite([
+    numberField(riskStats, "devTeamHoldPercentage"),
+    numberField(riskStats, "creatorHoldPercentage"),
+    numberField(riskStats, "privateVaultHoldPercentage"),
+  ]);
+  const metrics: InsiderRiskMetric[] = [];
+
+  if (positiveEvidence(insiderPercentage) || positiveEvidence(insiderWalletCount)) {
+    metrics.push(percentRiskMetric("Insider Exposure", insiderPercentage));
+  }
+  if (positiveEvidence(bundlerPercentage) || positiveEvidence(bundlerWalletCount)) {
+    metrics.push(percentRiskMetric("Bundler Exposure", bundlerPercentage));
+  }
+  if (positiveEvidence(top70SniperHoldPercentage) || positiveEvidence(sniperWalletCount)) {
+    metrics.push(percentRiskMetric("Sniper Exposure", top70SniperHoldPercentage));
+  }
+  if (positiveEvidence(freshWalletPercentage)) {
+    metrics.push(percentRiskMetric("Fresh Wallet Exposure", freshWalletPercentage));
+  }
+  if (positiveEvidence(phishingPercentage)) {
+    metrics.push(percentRiskMetric("Phishing Exposure", phishingPercentage));
+  }
+  if (top10HolderPercentage !== null) {
+    metrics.push(percentRiskMetric("Top 10 Concentration", top10HolderPercentage));
+  }
+  if (positiveEvidence(devCreatorHold)) {
+    metrics.push(percentRiskMetric("Dev/Creator Hold", devCreatorHold));
+  }
+  if (holderCount !== null) {
+    metrics.push(countRiskMetric("Holder Count", holderCount));
+  }
+
+  return {
+    cleanBadges:
+      insiderPercentage === 0 && (insiderWalletCount === 0 || insiderWalletCount === null)
+        ? ["No insider exposure detected"]
+        : [],
+    label: structuralRiskLabel(score),
+    metrics,
+    score,
+  };
+}
+
+function InsiderV3RiskPanel({ model }: { model: InsiderRiskModel }) {
+  return (
+    <section className={`rounded-[2rem] p-5 ${terminalGlassCardClass}`}>
+      <div className="grid gap-5 xl:grid-cols-[0.72fr_1.28fr] xl:items-start">
+        <div>
+          <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--nova-accent-soft)]">
+            Structural Risk
+          </p>
+          <div className="mt-4 flex items-end gap-2">
+            <p className="text-6xl font-light tracking-[-0.065em] text-[color:var(--nova-text)]">
+              {formatInsiderScore(model.score)}
+            </p>
+            {model.score !== null && (
+              <p className="pb-2 text-sm text-[color:var(--nova-text-muted)]">/100</p>
+            )}
+          </div>
+          <p className="mt-3 text-lg font-medium text-[color:var(--nova-text-soft)]">
+            {model.label}
+          </p>
+          {model.cleanBadges.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {model.cleanBadges.map((badge) => (
+                <span
+                  key={badge}
+                  className="rounded-full nova-card-inner px-3 py-1 text-[10px] uppercase tracking-[0.14em] text-[color:var(--nova-success)]"
+                >
+                  {badge}
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-[rgba(170,183,196,0.08)]">
+            <div
+              className="h-full rounded-full bg-[color:var(--nova-accent)] shadow-[0_0_18px_rgba(83,104,120,0.26)]"
+              style={{ width: `${model.score === null ? 0 : normalizeScore(model.score)}%` }}
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {model.metrics.map((metric) => (
+            <InsiderRiskMetricBox key={metric.label} metric={metric} />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function InsiderRiskMetricBox({ metric }: { metric: InsiderRiskMetric }) {
+  return (
+    <div className={`rounded-2xl p-3 ${terminalGlassCardClass}`}>
+      <p className="text-[10px] uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
+        {metric.label}
+      </p>
+      <p className="mt-2 text-lg font-medium tabular-nums text-[color:var(--nova-text)]">
+        {metric.value}
+      </p>
+      <div className="mt-3 h-1 overflow-hidden rounded-full bg-[rgba(170,183,196,0.08)]">
+        <div
+          className="h-full rounded-full bg-[rgba(170,183,196,0.58)]"
+          style={{ width: `${metric.barValue === null ? 0 : normalizeScore(metric.barValue)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function InsiderEvidenceCard({ label, rows }: InsiderEvidenceModel) {
+  return (
+    <div className={`min-h-[184px] rounded-2xl p-4 ${terminalGlassCardClass}`}>
+      <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-accent-soft)]">{label}</p>
+      <div className="mt-4 space-y-2.5">
+        {rows.map((row) => (
+          <div key={row} className="flex gap-2 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
+            <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-[rgba(170,183,196,0.36)]" />
+            <span>{row}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function InsiderRiskGroupGrid({ groups }: { groups: InsiderRiskGroupModel[] }) {
+  return (
+    <section>
+      <ForensicSectionHeading
+        eyebrow="Structural Tags"
+        title="Detected Risk Groups"
+        description="Risk groups are rendered only when currently loaded Nova evidence contains the corresponding signal."
+      />
+      <div className="mt-3 grid w-full auto-rows-fr gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {groups.length === 0 ? (
+          <div className={`rounded-2xl p-4 text-sm text-[color:var(--nova-text-soft)] md:col-span-2 xl:col-span-3 ${terminalGlassCardClass}`}>
+            No material risk groups detected from currently loaded evidence.
+          </div>
+        ) : (
+          groups.map((group) => (
+            <div
+              key={group.title}
+              className={`flex h-full min-h-[168px] flex-col rounded-2xl p-4 ${terminalGlassCardClass}`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-[color:var(--nova-text-soft)]">
+                    {group.title}
+                  </p>
+                  <p className="mt-1 text-xs text-[color:var(--nova-text-muted)]">
+                    {group.exposure}
+                  </p>
+                </div>
+                <span className={`whitespace-nowrap rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.14em] ${riskGroupLevelClass(group.level)}`}>
+                  {group.level}
+                </span>
+              </div>
+              <p className="mt-3 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
+                {group.text}
+              </p>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function InsiderHolderDepthStats({
+  holderAlpha,
+  holderAlphaDepth,
+}: {
+  holderAlpha: Record<string, unknown> | null;
+  holderAlphaDepth: Record<string, unknown> | null;
+}) {
+  const stats = [
+    {
+      label: "Analyzed Holders",
+      value:
+        numberField(holderAlphaDepth, "analyzedWalletCount") ??
+        numberField(holderAlpha, "analyzedWalletCount"),
+    },
+    {
+      label: "Deep Analyzed",
+      value:
+        numberField(holderAlphaDepth, "deepAnalyzedWalletCount") ??
+        numberField(holderAlpha, "deepAnalyzedWalletCount"),
+    },
+    {
+      label: "Light Analyzed",
+      value:
+        numberField(holderAlphaDepth, "lightAnalyzedWalletCount") ??
+        numberField(holderAlpha, "lightAnalyzedWalletCount"),
+    },
+  ];
+
+  return (
+    <div className="grid gap-2 md:grid-cols-3">
+      {stats.map((stat) => (
+        <div
+          key={stat.label}
+          className={`rounded-2xl p-3 ${terminalGlassCardClass}`}
+        >
+          <p className="text-[10px] uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
+            {stat.label}
+          </p>
+          <p className="mt-2 text-xl font-medium tabular-nums text-[color:var(--nova-text)]">
+            {formatInsiderCount(stat.value)}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function InsiderV3HolderTable({
+  error,
+  loadState,
+  rows,
+}: {
+  error: string;
+  loadState: HolderLoadState;
+  rows: InsiderHolderRowV3[];
+}) {
+  const [expandedWallet, setExpandedWallet] = useState("");
+  const isLoading = loadState === "loading";
+  const isError = loadState === "error";
+  const isIdle = loadState === "idle";
+  const isEmptyLoaded = loadState === "loaded" && rows.length === 0;
+  const gridClass =
+    "grid-cols-[64px_minmax(180px,1.25fr)_120px_150px_170px_110px]";
+
+  return (
+    <section className={`rounded-[2rem] p-5 ${terminalGlassCardClass}`}>
+      <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-[0.35em] text-[color:var(--nova-accent-soft)]">
+            Holder Intelligence
+          </p>
+          <h2 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-[color:var(--nova-text)]">
+            Top Holder Intelligence
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[color:var(--nova-text-muted)]">
+            Analyzed holders ranked by ownership, wallet quality, and behavioral intelligence.
+          </p>
+        </div>
+        <span className="self-start rounded-full nova-card-inner px-3 py-1 text-xs text-[color:var(--nova-accent-soft)] sm:self-auto">
+          {rows.length} loaded
+        </span>
+      </div>
+
+      <div className={`w-full overflow-x-auto rounded-[1.4rem] ${terminalGlassCardClass}`}>
+        <div className={`grid min-h-[42px] w-full min-w-[980px] ${gridClass} items-center gap-3 ${terminalTableHeaderClass}`}>
+          <span>Rank</span>
+          <span>Wallet</span>
+          <span className="text-center">Ownership</span>
+          <span className="text-center">Wallet Score</span>
+          <span className="text-center">Behavior</span>
+          <span className="text-center">Analysis</span>
+        </div>
+
+        <div className="w-full min-w-[980px]">
+          {isIdle && (
+            <HolderStateMessage
+              title="Select a token to activate holder intelligence."
+              detail="NovaOS will render analyzed holder intelligence once scan evidence is available."
+            />
+          )}
+
+          {isLoading && <HolderTableSkeleton />}
+
+          {isError && (
+            <HolderStateMessage
+              title="Holder intelligence could not be loaded."
+              detail={error || "The loaded holder evidence returned an unexpected error."}
+              tone="error"
+            />
+          )}
+
+          {isEmptyLoaded && (
+            <HolderStateMessage
+              title="No analyzed holder wallets are available."
+              detail="Holder intelligence will appear after analysis completes."
+            />
+          )}
+
+          {rows.map((row) => (
+            <div key={`${row.rank ?? "unranked"}-${row.wallet}`}>
+              <button
+                type="button"
+                onClick={() =>
+                  setExpandedWallet((current) =>
+                    current === row.wallet ? "" : row.wallet
+                  )
+                }
+                className={`grid min-h-[52px] w-full ${gridClass} items-center gap-3 text-left text-[13px] focus:outline-none focus:ring-1 focus:ring-inset focus:ring-[rgba(83,104,120,0.24)] ${terminalRowClass}`}
+              >
+                <span className="font-mono text-[color:var(--nova-text-muted)]">
+                  {row.rank === null ? "N/A" : `#${row.rank}`}
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate font-mono font-medium text-[color:var(--nova-text)]">
+                    {shortInsiderWalletAddress(row.wallet)}
+                  </p>
+                </div>
+                <span className="text-center font-medium tabular-nums text-[color:var(--nova-accent-soft)]">
+                  {formatInsiderPercent(row.ownershipPercent)}
+                </span>
+                <div>
+                  <p className="text-center font-medium tabular-nums text-[color:var(--nova-text)]">
+                    {formatInsiderScore(row.score)}
+                  </p>
+                  <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[rgba(170,183,196,0.08)]">
+                    <div
+                      className="h-full rounded-full bg-[rgba(170,183,196,0.58)]"
+                      style={{ width: `${row.score === null ? 0 : normalizeScore(row.score)}%` }}
+                    />
+                  </div>
+                </div>
+                <span className="truncate text-center text-[color:var(--nova-text-soft)]">
+                  {row.behaviorLabel}
+                </span>
+                <span className="text-center text-[color:var(--nova-text-soft)]">
+                  {row.analysisType}
+                </span>
+              </button>
+              {expandedWallet === row.wallet && (
+                <InsiderWalletExpandedPanel row={row} />
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function InsiderWalletExpandedPanel({ row }: { row: InsiderHolderRowV3 }) {
+  const scoreMetrics = buildInsiderWalletScoreMetrics(row);
+
+  return (
+    <div className="border-b border-[color:rgba(83,104,120,0.12)] bg-[rgba(8,37,51,0.16)] px-4 py-4">
+      <div className={`rounded-2xl p-4 ${terminalGlassCardClass}`}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="break-all font-mono text-xs text-[color:var(--nova-text)]">
+              {row.wallet}
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <InsiderMiniPill value="Wallet" />
+              <InsiderMiniPill value={row.rank === null ? "Rank unavailable" : `#${row.rank}`} />
+              <InsiderMiniPill value={formatInsiderPercent(row.ownershipPercent)} />
+              <InsiderMiniPill value={`${row.analysisType} analysis`} />
+              <InsiderMiniPill value={`${formatInsiderScore(row.score)} score`} />
+              <InsiderMiniPill value={row.behaviorLabel} />
+              <InsiderMiniPill value={row.confidenceLevel || "Unavailable"} />
+            </div>
+          </div>
+        </div>
+
+        {scoreMetrics.length > 0 && (
+          <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {scoreMetrics.map((metric) => (
+              <InsiderWalletScoreBar key={metric.label} metric={metric} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function InsiderMiniPill({ value }: { value: string }) {
+  return (
+    <span className="rounded-full nova-card-inner px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] text-[color:var(--nova-text-soft)]">
+      {value}
+    </span>
+  );
+}
+
+function InsiderWalletScoreBar({ metric }: { metric: InsiderWalletScoreMetric }) {
+  return (
+    <div className={`rounded-xl p-3 ${terminalGlassCardClass}`}>
+      <div className="flex items-center justify-between gap-3">
+        <p className="truncate text-[10px] uppercase tracking-[0.14em] text-[color:var(--nova-text-muted)]">
+          {metric.label}
+        </p>
+        <p className="shrink-0 text-xs font-medium tabular-nums text-[color:var(--nova-text-soft)]">
+          {metric.value}
+        </p>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[rgba(170,183,196,0.08)]">
+        <div
+          className="h-full rounded-full bg-[rgba(170,183,196,0.58)]"
+          style={{ width: `${metric.barValue === null ? 0 : normalizeScore(metric.barValue)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function buildInsiderEvidenceCards({
+  holderAlpha,
+  riskStats,
+  riskSubScores,
+}: {
+  holderAlpha: Record<string, unknown> | null;
+  riskStats: Record<string, unknown> | null;
+  riskSubScores: Record<string, unknown> | null;
+}): InsiderEvidenceModel[] {
+  const top10HolderPercentage = numberField(riskStats, "top10HolderPercentage");
+  const holderCount = numberField(riskStats, "holderCount");
+  const analyzedOwnership = numberField(holderAlpha, "totalAnalyzedOwnershipPercent");
+  const taggedRiskRows = [
+    positiveEvidence(numberField(riskStats, "bundlerPercentage"))
+      ? `Bundler exposure is ${formatInsiderPercent(numberField(riskStats, "bundlerPercentage"))}.`
+      : null,
+    positiveEvidence(numberField(riskStats, "phishingPercentage"))
+      ? `Phishing exposure is ${formatInsiderPercent(numberField(riskStats, "phishingPercentage"))}.`
+      : null,
+    positiveEvidence(numberField(riskStats, "freshWalletPercentage"))
+      ? `Fresh-wallet exposure is ${formatInsiderPercent(numberField(riskStats, "freshWalletPercentage"))}.`
+      : null,
+    positiveEvidence(numberField(riskStats, "top70SniperHoldPercentage"))
+      ? `Sniper holder exposure is ${formatInsiderPercent(numberField(riskStats, "top70SniperHoldPercentage"))}.`
+      : null,
+  ].filter((row): row is string => Boolean(row));
+  const weakOwnership = numberField(holderAlpha, "weakOrToxicOwnershipPercent");
+  const goodOwnership = numberField(holderAlpha, "goodOrBetterOwnershipPercent");
+  const weakHolderRiskScore = numberField(riskSubScores, "weakHolderRiskScore");
+
+  return [
+    {
+      label: "Concentration",
+      rows: [
+        top10HolderPercentage !== null
+          ? `Top 10 holders control ${formatInsiderPercent(top10HolderPercentage)} of supply.`
+          : null,
+        holderCount !== null && analyzedOwnership !== null
+          ? `Nova analyzed ${formatInsiderCount(holderCount)} holders covering ${formatInsiderPercent(analyzedOwnership)} ownership.`
+          : holderCount !== null
+            ? `GMGN reports ${formatInsiderCount(holderCount)} holders.`
+            : null,
+      ].filter((row): row is string => Boolean(row)).slice(0, 2),
+    },
+    {
+      label: "Tagged Risk",
+      rows: taggedRiskRows.length ? taggedRiskRows.slice(0, 2) : ["No tagged exposure detected."],
+    },
+    {
+      label: "Holder Quality",
+      rows: [
+        weakOwnership !== null && goodOwnership !== null
+          ? `Weak/toxic ownership is ${formatInsiderPercent(weakOwnership)} vs ${formatInsiderPercent(goodOwnership)} good+ ownership.`
+          : null,
+        weakHolderRiskScore !== null
+          ? `Weak holder pressure is ${formatInsiderScore(weakHolderRiskScore)}/100.`
+          : null,
+      ].filter((row): row is string => Boolean(row)).slice(0, 2),
+    },
+  ];
+}
+
+function buildInsiderRiskGroups({
+  holderAlpha,
+  riskStats,
+}: {
+  holderAlpha: Record<string, unknown> | null;
+  riskStats: Record<string, unknown> | null;
+}): InsiderRiskGroupModel[] {
+  const groups: InsiderRiskGroupModel[] = [];
+  const insiderPercentage = numberField(riskStats, "insiderPercentage");
+  const insiderWalletCount = numberField(riskStats, "insiderWalletCount");
+  const bundlerPercentage = numberField(riskStats, "bundlerPercentage");
+  const bundlerWalletCount = numberField(riskStats, "bundlerWalletCount");
+  const sniperWalletCount = numberField(riskStats, "sniperWalletCount");
+  const top70SniperHoldPercentage = numberField(riskStats, "top70SniperHoldPercentage");
+  const freshWalletPercentage = numberField(riskStats, "freshWalletPercentage");
+  const freshWalletCount = numberField(riskStats, "freshWalletCount");
+  const phishingPercentage = numberField(riskStats, "phishingPercentage");
+  const weakOwnership = numberField(holderAlpha, "weakOrToxicOwnershipPercent");
+  const goodOwnership = numberField(holderAlpha, "goodOrBetterOwnershipPercent");
+  const hasSniperLikeHolder = [
+    ...readRecordArray(holderAlpha?.allWalletsByHolderRank),
+    ...readRecordArray(holderAlpha?.allWalletsByAlphaV3),
+    ...readRecordArray(holderAlpha?.topWalletsByAlphaV3),
+    ...readRecordArray(holderAlpha?.bottomWalletsByAlphaV3),
+    ...readRecordArray(holderAlpha?.holders),
+    ...readRecordArray(holderAlpha?.wallets),
+    ...readRecordArray(holderAlpha?.holderResults),
+  ].some((wallet) => wallet.isSniperLikeHolder === true);
+
+  if (positiveEvidence(insiderPercentage)) {
+    groups.push({
+      exposure: `${formatInsiderPercent(insiderPercentage)} exposure · ${formatInsiderCount(insiderWalletCount)} wallets`,
+      level: riskLevelFromPercent(insiderPercentage),
+      text: "GMGN identifies insider-tagged holder exposure in the loaded token risk statistics.",
+      title: "Insider Group",
+    });
+  }
+
+  if (positiveEvidence(bundlerPercentage)) {
+    groups.push({
+      exposure: `${formatInsiderPercent(bundlerPercentage)} exposure · ${formatInsiderCount(bundlerWalletCount)} wallets`,
+      level: riskLevelFromPercent(bundlerPercentage),
+      text: "Bundler-tagged wallets are present in the structural risk evidence.",
+      title: "Bundler Group",
+    });
+  }
+
+  if (positiveEvidence(top70SniperHoldPercentage) || hasSniperLikeHolder) {
+    groups.push({
+      exposure: positiveEvidence(top70SniperHoldPercentage)
+        ? `${formatInsiderPercent(top70SniperHoldPercentage)} exposure · ${formatInsiderCount(sniperWalletCount)} wallets`
+        : "Sniper-like holder detected",
+      level: riskLevelFromPercent(top70SniperHoldPercentage),
+      text: "Sniper pressure is detected through tagged sniper wallets or top-holder sniper ownership.",
+      title: "Sniper Group",
+    });
+  }
+
+  if (positiveEvidence(freshWalletPercentage)) {
+    groups.push({
+      exposure: `${formatInsiderPercent(freshWalletPercentage)} exposure · ${formatInsiderCount(freshWalletCount)} wallets`,
+      level: riskLevelFromPercent(freshWalletPercentage),
+      text: "Fresh-wallet concentration is present in the loaded risk pressure evidence.",
+      title: "Fresh Wallet Group",
+    });
+  }
+
+  if (positiveEvidence(phishingPercentage)) {
+    groups.push({
+      exposure: `${formatInsiderPercent(phishingPercentage)} exposure`,
+      level: riskLevelFromPercent(phishingPercentage),
+      text: "Phishing-tagged holder exposure is visible in the structural risk evidence.",
+      title: "Phishing Group",
+    });
+  }
+
+  if (
+    weakOwnership !== null &&
+    goodOwnership !== null &&
+    weakOwnership > goodOwnership
+  ) {
+    groups.push({
+      exposure: `${formatInsiderPercent(weakOwnership)} weak/toxic vs ${formatInsiderPercent(goodOwnership)} good+ ownership`,
+      level: riskLevelFromPercent(weakOwnership),
+      text: "Weak or toxic analyzed ownership outweighs good-or-better holder ownership.",
+      title: "Weak Holder Group",
+    });
+  }
+
+  return groups;
+}
+
+function buildInsiderHolderRows(
+  novaResponse: NovaConvictionResult | null,
+  fallbackWalletRows: WalletRow[] = []
+): InsiderHolderRowV3[] {
+  const modules = readRecord(novaResponse?.moduleSummaries);
+  const holderAlpha = readRecord(modules?.holderAlpha);
+  const holderAlphaDepth =
+    readRecord(novaResponse?.holderAlphaDepth) ??
+    readRecord(holderAlpha?.holderAlphaDepth);
+  const expectedCount =
+    numberField(holderAlphaDepth, "analyzedWalletCount") ??
+    numberField(holderAlpha, "analyzedWalletCount") ??
+    expectedInsiderHolderCount(novaResponse?.analysisMode);
+  const holderCandidates = [
+    ...readRecordArray(holderAlpha?.allWalletsByHolderRank),
+    ...readRecordArray(holderAlpha?.allWalletsByAlphaV3),
+    ...readRecordArray(holderAlpha?.topWalletsByAlphaV3),
+    ...readRecordArray(holderAlpha?.bottomWalletsByAlphaV3),
+    ...readRecordArray(holderAlpha?.holders),
+    ...readRecordArray(holderAlpha?.wallets),
+    ...readRecordArray(holderAlpha?.holderResults),
+    ...fallbackWalletRows.map(insiderFallbackWalletRowToRecord),
+  ];
+  const seen = new Set<string>();
+  const rows = holderCandidates
+    .map((wallet) => {
+      const address = insiderWalletAddress(wallet);
+      if (!address) return null;
+      const key = address.toLowerCase();
+      if (seen.has(key)) return null;
+      seen.add(key);
+      const score =
+        numberField(wallet, "walletAlphaScore") ??
+        numberField(wallet, "walletAlphaV3") ??
+        numberField(wallet, "score");
+      const ownershipPercent =
+        numberField(wallet, "ownershipPercent") ??
+        numberField(wallet, "ownershipPercentage");
+      return {
+        analysisType: insiderAnalysisType(wallet),
+        behaviorLabel: score === null ? "Unavailable" : holderAlphaBehaviorLabel(score),
+        confidenceLevel: String(wallet.confidenceLevel || "Unavailable"),
+        explanations: safeStringArray(wallet.explanations),
+        labels: [
+          ...safeStringArray(wallet.holderLabels),
+          ...safeStringArray(wallet.labels),
+        ],
+        rank: numberField(wallet, "holderRank") ?? numberField(wallet, "rank"),
+        rawWallet: wallet,
+        rawMetrics: readRecord(wallet.rawMetrics),
+        score,
+        usdValue:
+          numberField(wallet, "usdValue") ??
+          numberField(wallet, "valueUsd") ??
+          numberField(wallet, "usd"),
+        wallet: address,
+        ownershipPercent,
+      };
+    })
+    .filter((row): row is InsiderHolderRowV3 => Boolean(row))
+    .sort((left, right) => {
+      if (left.rank === null && right.rank === null) return 0;
+      if (left.rank === null) return 1;
+      if (right.rank === null) return -1;
+      return left.rank - right.rank;
+    });
+
+  if (
+    process.env.NODE_ENV !== "production" &&
+    rows.length === 20 &&
+    expectedCount !== null &&
+    expectedCount > 20
+  ) {
+    console.warn(
+      `[NovaOS] Insider Scan received only 20 holder rows although holder depth expected ${Math.round(expectedCount)}. Backend response may not expose all analyzed holders.`
+    );
+  }
+
+  return rows.slice(0, expectedCount ?? rows.length);
+}
+
+function insiderWalletAddress(wallet: Record<string, unknown>) {
+  const value =
+    wallet.wallet ??
+    wallet.address ??
+    wallet.fullAddress ??
+    wallet.ownerAddress ??
+    wallet.walletAddress;
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function insiderFallbackWalletRowToRecord(row: WalletRow): Record<string, unknown> {
+  return {
+    wallet: row.fullAddress || row.wallet || row.address,
+    holderRank: row.rank,
+    ownershipPercent: parseInsiderPercentText(row.ownershipPercentage),
+    walletAlphaScore: row.score,
+    analysisDepth: "light",
+  };
+}
+
+function parseInsiderPercentText(value: string | undefined) {
+  if (!value) return null;
+  const numeric = Number(value.replace("%", "").trim());
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function expectedInsiderHolderCount(mode: NovaAnalysisMode | null | undefined) {
+  if (mode === "fast") return 50;
+  if (mode === "balanced" || mode === "deep") return 100;
+  return null;
+}
+
+function buildInsiderWalletScoreMetrics(row: InsiderHolderRowV3): InsiderWalletScoreMetric[] {
+  const rawMetrics = row.rawMetrics;
+  const lightBreakdown = readRecord(row.rawWallet.lightScoreBreakdown);
+  const walletAlphaScore =
+    numberField(row.rawWallet, "walletAlphaScore") ??
+    numberField(row.rawWallet, "walletAlphaV3") ??
+    row.score;
+
+  const metrics =
+    row.analysisType === "Deep"
+      ? [
+          scoreBarMetric("Wallet Score", walletAlphaScore),
+          scoreBarMetric("Entry Discipline", numberField(row.rawWallet, "entryDisciplineV3")),
+          scoreBarMetric("Exit Discipline", numberField(row.rawWallet, "exitDisciplineV3")),
+          scoreBarMetric("Consistency", numberField(row.rawWallet, "consistencyV3")),
+          scoreBarMetric("Win Rate Quality", numberField(row.rawWallet, "winRateQualityV3")),
+          scoreBarMetric("Rotation Quality", numberField(row.rawWallet, "rotationQualityV3")),
+          scoreBarMetric("Risk Hygiene", numberField(row.rawWallet, "riskHygieneV3")),
+          scoreBarMetric("Confidence", numberField(row.rawWallet, "dataConfidenceV3")),
+        ]
+      : [
+          scoreBarMetric("Wallet Score", walletAlphaScore),
+          scoreBarMetric("PnL Efficiency", numberField(lightBreakdown, "pnlEfficiencyQuality")),
+          scoreBarMetric("Trade Depth", numberField(lightBreakdown, "tradeDepthQuality")),
+          scoreBarMetric("Risk Control", numberField(lightBreakdown, "riskControlQuality")),
+          scoreBarMetric("Activity Quality", numberField(lightBreakdown, "activityQuality")),
+          scoreBarMetric("Data Completeness", numberField(lightBreakdown, "dataCompletenessQuality")),
+          rawBarMetric(
+            "Realized PnL %",
+            numberField(rawMetrics, "realizedPnlPercent"),
+            (value) => clampNumber(50 + value / 2, 0, 100),
+            (value) => `${Number(value.toFixed(2))}%`
+          ),
+          rawBarMetric(
+            "PnL Multiplier",
+            numberField(rawMetrics, "pnlMultiplier"),
+            (value) => clampNumber(value * 50, 0, 100),
+            (value) => `${Number(value.toFixed(2))}x`
+          ),
+        ];
+
+  return metrics.filter((metric): metric is InsiderWalletScoreMetric => Boolean(metric));
+}
+
+function scoreBarMetric(label: string, value: number | null): InsiderWalletScoreMetric | null {
+  if (value === null) return null;
+  return {
+    barValue: value,
+    label,
+    value: formatInsiderScore(value),
+  };
+}
+
+function rawBarMetric(
+  label: string,
+  value: number | null,
+  normalize: (value: number) => number,
+  format: (value: number) => string
+): InsiderWalletScoreMetric | null {
+  if (value === null) return null;
+  return {
+    barValue: normalize(value),
+    label,
+    value: format(value),
+  };
+}
+
+function percentRiskMetric(label: string, value: number | null): InsiderRiskMetric {
+  return {
+    barValue: value,
+    label,
+    value: formatInsiderPercent(value),
+  };
+}
+
+function countRiskMetric(label: string, value: number | null): InsiderRiskMetric {
+  return {
+    barValue: value === null ? null : Math.min(100, Math.log10(Math.max(value, 0) + 1) * 20),
+    label,
+    value: formatInsiderCount(value),
+  };
+}
+
+function structuralRiskLabel(score: number | null) {
+  if (score === null) return "Unavailable";
+  if (score <= 20) return "Low structural risk";
+  if (score <= 40) return "Controlled structural risk";
+  if (score <= 60) return "Moderate structural risk";
+  if (score <= 80) return "Elevated structural risk";
+  return "Critical structural risk";
+}
+
+function formatInsiderPercent(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "Unavailable";
+  return `${Number(value.toFixed(value >= 10 ? 1 : 2))}%`;
+}
+
+function formatInsiderScore(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "Unavailable";
+  return String(Math.round(value));
+}
+
+function formatInsiderCount(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "Unavailable";
+  return String(Math.round(value));
+}
+
+function formatInsiderMode(value: string | null | undefined) {
+  if (!value) return "Unavailable";
+  const normalized = value.toLowerCase();
+  if (normalized === "fast") return "Fast";
+  if (normalized === "balanced") return "Balanced";
+  if (normalized === "deep") return "Deep";
+  return value;
+}
+
+function maxFinite(values: Array<number | null | undefined>) {
+  const finite = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  return finite.length ? Math.max(...finite) : null;
+}
+
+function positiveEvidence(value: number | null) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function riskLevelFromPercent(value: number | null) {
+  if (value === null) return "Observed";
+  if (value >= 30) return "Critical";
+  if (value >= 15) return "Elevated";
+  if (value > 0) return "Moderate";
+  return "Low";
+}
+
+function riskGroupLevelClass(level: string) {
+  if (level === "Critical" || level === "Elevated") {
+    return "border-[color:rgba(83,104,120,0.32)] bg-[rgba(83,104,120,0.1)] text-[color:var(--nova-danger)]";
+  }
+  if (level === "Moderate") {
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-warning)]";
+  }
+  return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-soft)]";
+}
+
+function insiderAnalysisType(wallet: Record<string, unknown>) {
+  if (wallet.analysisDepth === "deep") return "Deep";
+  if (wallet.analysisDepth === "light") return "Light";
+  return "Unknown";
+}
+
 function EvidenceCard({ label, rows }: { label: string; rows: string[] }) {
   return (
-    <div className="min-h-[184px] rounded-2xl border border-white/10 bg-black/20 p-4">
-      <p className="text-xs uppercase tracking-[0.18em] text-cyan-100/52">{label}</p>
+    <div className={`min-h-[184px] rounded-2xl p-4 ${terminalGlassCardClass}`}>
+      <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-accent)]">{label}</p>
       <div className="mt-4 space-y-2.5">
         {(rows.length
           ? rows
           : ["Insufficient evidence."]
         ).map((row) => (
-          <div key={row} className="flex gap-2 text-xs leading-relaxed text-white/48">
-            <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-cyan-100/42" />
+          <div key={row} className="flex gap-2 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
+            <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-[rgba(83,104,120,0.42)]" />
             <span>{row}</span>
           </div>
         ))}
@@ -9776,38 +12523,38 @@ function DetectedRiskGroups({
         title="Detected Risk Groups"
         description="Wallets are grouped by behavioral similarity only. These inferences do not prove common ownership."
       />
-      <div className="mt-3 grid max-w-[1180px] gap-3 lg:grid-cols-2">
+      <div className="mt-3 grid w-full auto-rows-fr gap-3 md:grid-cols-2 xl:grid-cols-3">
         {groups.length === 0 ? (
-          <div className="rounded-2xl border border-cyan-100/10 bg-cyan-100/[0.025] p-4 text-sm text-white/42 lg:col-span-2">
-            No significant risk groups detected.
+          <div className={`rounded-2xl p-4 text-sm text-[color:var(--nova-text-soft)] md:col-span-2 xl:col-span-3 ${terminalGlassCardClass}`}>
+            No material risk groups detected from currently loaded evidence.
           </div>
         ) : (
           groups.slice(0, 6).map((group) => (
             <div
               key={group.groupId}
-              className="min-h-[164px] rounded-2xl border border-white/10 bg-black/20 p-4"
+              className={`flex h-full min-h-[190px] flex-col rounded-2xl p-4 ${terminalGlassCardClass}`}
             >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <p className="text-sm font-medium text-white/74">
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-[color:var(--nova-text-soft)]">
                     {riskGroupLabel(group.reason)}
                   </p>
-                  <p className="mt-1 text-xs text-white/32">
+                  <p className="mt-1 text-xs text-[color:var(--nova-text-muted)]">
                     {group.wallets.length} wallets grouped by behavioral similarity
                   </p>
                 </div>
-                <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.14em] ${riskScorePillClass(group.riskScore)}`}>
+                <span className={`justify-self-start whitespace-nowrap rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.14em] sm:justify-self-end ${riskScorePillClass(group.riskScore)}`}>
                   {group.confidence} confidence · {group.riskScore}/100
                 </span>
               </div>
-              <p className="mt-3 text-xs leading-relaxed text-white/42">
+              <p className="mt-3 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
                 {group.reason}
               </p>
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-auto flex flex-wrap gap-2 pt-4">
                 {group.wallets.slice(0, 4).map((wallet) => (
                   <span
                     key={wallet}
-                    className="rounded-full border border-white/10 bg-white/[0.035] px-2.5 py-1 font-mono text-[11px] text-white/48"
+                    className="rounded-full border border-[color:rgba(120,170,185,0.10)] bg-[rgba(8,37,51,0.24)] px-2.5 py-1 font-mono text-[11px] text-[color:var(--nova-text-soft)]"
                   >
                     {shortInsiderWalletAddress(wallet)}
                   </span>
@@ -9886,9 +12633,9 @@ function InsiderHolderRiskPreview({
         title="Top Holder Risk Preview"
         description="A concise review of the highest-ranked holders before the complete holder matrix."
       />
-      <div className="mt-3 w-full overflow-hidden rounded-2xl border border-white/10 bg-[#06080c]/88">
+      <div className="mt-3 w-full overflow-hidden rounded-2xl nova-card-inner">
         <div className="w-full overflow-x-auto">
-          <div className={`grid min-h-[42px] w-full min-w-[920px] ${insiderPreviewGridClass} items-center gap-3 border-b border-white/10 bg-black/30 px-4 py-3 text-[10px] uppercase tracking-[0.12em] text-white/42`}>
+          <div className={`grid min-h-[42px] w-full min-w-[920px] ${insiderPreviewGridClass} items-center gap-3 border-b border-[color:var(--nova-border)] nova-card-inner px-4 py-3 text-[10px] uppercase tracking-[0.12em] text-[color:var(--nova-text-soft)]`}>
             <span>Wallet</span>
             <span className="text-center">Ownership</span>
             <span className="text-center">Behavior</span>
@@ -9912,7 +12659,7 @@ function InsiderHolderRiskPreview({
                 key={`${row.rank}-${row.fullAddress || row.wallet}-risk-preview`}
                 type="button"
                 onClick={() => onSelectWallet(row, profile)}
-                className={`grid min-h-[60px] w-full min-w-[920px] ${insiderPreviewGridClass} items-center gap-3 border-b border-white/[0.055] px-4 py-3 text-left text-xs transition hover:bg-cyan-100/[0.035] focus:outline-none focus:ring-1 focus:ring-inset focus:ring-cyan-100/20`}
+                className={`grid min-h-[60px] w-full min-w-[920px] ${insiderPreviewGridClass} items-center gap-3 border-b border-[color:rgba(83,104,120,0.12)] px-4 py-3 text-left text-xs transition hover:nova-card-inner focus:outline-none focus:ring-1 focus:ring-inset focus:ring-[rgba(83,104,120,0.2)]`}
               >
                 <WalletAddressCopy
                   address={row.fullAddress}
@@ -9921,7 +12668,7 @@ function InsiderHolderRiskPreview({
                   formatAddress={shortInsiderWalletAddress}
                   onCopy={copyWalletAddress}
                 />
-                <span className="text-center font-medium tabular-nums text-cyan-100/72">
+                <span className="text-center font-medium tabular-nums text-[color:var(--nova-accent)]">
                   {row.ownershipPercentage}
                 </span>
                 <div className="flex justify-center">
@@ -9936,7 +12683,7 @@ function InsiderHolderRiskPreview({
                 </div>
                 <ScoreCell centered value={profile?.concentrationRiskScore} />
                 <ScoreCell centered value={profile?.activityVelocityScore} />
-                <span className="truncate whitespace-nowrap text-center text-white/56">
+                <span className="truncate whitespace-nowrap text-center text-[color:var(--nova-text-soft)]">
                   {holderRiskHint(row, profile, Boolean(address && groupedWallets.has(address)))}
                 </span>
               </button>
@@ -9954,7 +12701,7 @@ function InsiderPreviewSkeleton() {
       {Array.from({ length: 5 }).map((_, index) => (
         <div
           key={index}
-          className={`grid min-h-[60px] w-full min-w-[920px] ${insiderPreviewGridClass} items-center gap-3 border-b border-white/[0.055] px-4 py-3`}
+          className={`grid min-h-[60px] w-full min-w-[920px] ${insiderPreviewGridClass} items-center gap-3 border-b border-[color:rgba(83,104,120,0.12)] px-4 py-3`}
         >
           <SkeletonLine className="h-3 w-28" />
           <SkeletonLine className="h-3 w-14" />
@@ -9980,10 +12727,10 @@ function InsiderScanMethodology({
     <section className={terminalMethodologyClass}>
       <div className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-cyan-100/48">
+          <p className="text-xs uppercase tracking-[0.3em] text-[color:var(--nova-accent-soft)]">
             Methodology
           </p>
-          <p className="mt-3 max-w-4xl text-sm leading-relaxed text-white/45">
+          <p className="mt-3 max-w-4xl text-sm leading-relaxed text-[color:var(--nova-text-soft)]">
             Insider Scan combines holder distribution, wallet metadata, cluster
             overlap, bundle-like timing, funding similarity and token-transfer
             behavior where available. It is inference-based and does not prove
@@ -10014,8 +12761,15 @@ function InsiderScanMethodology({
 const INSIDER_SCAN_REMOVED_SECTIONS = [
   HolderIntelligenceMatrixPanel,
   WalletReputationMiniCard,
+  InsiderRiskV2Panel,
+  EvidenceCard,
+  DetectedRiskGroups,
   InsiderHolderRiskPreview,
   InsiderScanMethodology,
+  buildConcentrationEvidence,
+  buildCoordinationEvidence,
+  buildBehaviorEvidence,
+  StableWalletIntelligenceTable,
 ];
 void INSIDER_SCAN_REMOVED_SECTIONS;
 
@@ -10040,7 +12794,7 @@ function InsiderScanSkeleton({
 }) {
   return (
     <div className="space-y-4">
-      <section className="rounded-[2rem] border border-white/10 bg-[#06080c]/90 p-5">
+      <section className="rounded-[2rem] nova-card-inner p-5">
         <div className="flex items-center justify-between gap-4">
           <div>
             <SkeletonLine className="h-3 w-28" />
@@ -10057,14 +12811,14 @@ function InsiderScanSkeleton({
           </div>
         </div>
       </section>
-      <section className="rounded-[2rem] border border-white/10 bg-[#06080c]/90 p-5">
+      <section className="rounded-[2rem] nova-card-inner p-5">
         <SkeletonLine className="h-3 w-40" />
         <SkeletonLine className="mt-4 h-8 w-64" />
         <SkeletonLine className="mt-4 h-3 w-full max-w-2xl" />
       </section>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {Array.from({ length: 6 }).map((_, index) => (
-          <div key={index} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+          <div key={index} className="rounded-2xl nova-card-inner p-4">
             <SkeletonLine className="h-3 w-28" />
             <SkeletonLine className="mt-5 h-7 w-14" />
             <SkeletonLine className="mt-5 h-3 w-full" />
@@ -10086,20 +12840,20 @@ function ForensicSectionHeading({
 }) {
   return (
     <div>
-      <p className="text-xs uppercase tracking-[0.3em] text-cyan-100/42">{eyebrow}</p>
-      <h2 className="mt-2 text-xl font-semibold tracking-[-0.045em] text-white/84">
+      <p className="text-xs uppercase tracking-[0.3em] text-[color:var(--nova-accent-soft)]">{eyebrow}</p>
+      <h2 className="mt-2 text-xl font-semibold tracking-[-0.045em] text-[color:var(--nova-text)]">
         {title}
       </h2>
-      <p className="mt-1 text-xs leading-relaxed text-white/35">{description}</p>
+      <p className="mt-1 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">{description}</p>
     </div>
   );
 }
 
 function ForensicFact({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="min-w-0 rounded-xl border border-white/10 bg-black/24 px-3 py-2.5">
-      <p className="text-[9px] uppercase tracking-[0.16em] text-white/30">{label}</p>
-      <p className="mt-1 truncate text-sm font-medium tabular-nums text-white/70" title={String(value)}>
+    <div className="min-w-0 rounded-xl border border-[color:var(--nova-border)] nova-card-inner px-3 py-2.5">
+      <p className="text-[9px] uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">{label}</p>
+      <p className="mt-1 truncate text-sm font-medium tabular-nums text-[color:var(--nova-text-soft)]" title={String(value)}>
         {value}
       </p>
     </div>
@@ -10203,1446 +12957,9 @@ function riskGroupLabel(reason: string) {
 }
 
 function riskScorePillClass(score: number) {
-  if (score >= 75) return "border-red-100/14 bg-red-100/[0.045] text-red-100/66";
-  if (score >= 45) return "border-amber-100/14 bg-amber-100/[0.045] text-amber-100/66";
-  return "border-cyan-100/12 bg-cyan-100/[0.045] text-cyan-100/66";
-}
-
-type SignalCategory =
-  | "Supportive"
-  | "Warning"
-  | "Neutral"
-  | "Insufficient data";
-
-type SignalSeverity = "Low" | "Medium" | "High";
-
-type NovaSignal = {
-  id: string;
-  title: string;
-  category: SignalCategory;
-  severity: SignalSeverity;
-  confidence: string;
-  explanation: string;
-  inputs: Array<{ label: string; value: string | number }>;
-  strength: number;
-};
-
-type SignalBoardModel = {
-  signals: NovaSignal[];
-  counts: Record<SignalCategory, number>;
-  verdict: string;
-  verdictCopy: string;
-  strongestSignal?: NovaSignal;
-  strongestWarning?: NovaSignal;
-  providerLimitReached: boolean;
-  isPartial: boolean;
-  coverage: {
-    dataConfidence: string;
-    deepBehavior: string;
-    holderCoverage: string | number;
-    marketCoverage: string;
-    providerWarnings: string;
-    cacheState: string;
-  };
-};
-
-function SignalsMvpSection({
-  behaviorPreview,
-  behaviorPreviewError,
-  conviction,
-  convictionError,
-  convictionLoadState,
-  holderError,
-  holderLoadState,
-  tokenData,
-  tokenFlowSummaryV2,
-  tokenIntelligence,
-  unifiedAnalysis,
-  walletRows,
-}: {
-  behaviorPreview: WalletBehaviorPreviewData | null;
-  behaviorPreviewError: string;
-  conviction: ExplainableConvictionData | null;
-  convictionError: string;
-  convictionLoadState: HolderLoadState;
-  holderError: string;
-  holderLoadState: HolderLoadState;
-  tokenData: TokenResult;
-  tokenFlowSummaryV2: TokenFlowSummaryV2 | null;
-  tokenIntelligence: TokenIntelligenceData | null;
-  unifiedAnalysis: UnifiedTokenAnalysisData | null;
-  walletRows: WalletRow[];
-}) {
-  const hasToken = Boolean(tokenData.tokenAddress);
-  const isLoading = convictionLoadState === "loading" || holderLoadState === "loading";
-  const signalBoard = buildSignalBoardModel({
-    behaviorPreview,
-    behaviorPreviewError,
-    conviction,
-    convictionError,
-    holderError,
-    holderLoadState,
-    tokenFlowSummaryV2,
-    tokenIntelligence,
-    unifiedAnalysis,
-    walletRows,
-  });
-
-  if (!hasToken) {
-    return (
-      <SignalStateCard
-        title="Select a token to generate signals."
-        detail="Signals will summarize conviction, wallet behavior, structural risk and data coverage after a token analysis is available."
-      />
-    );
-  }
-
-  if (isLoading && !conviction) {
-    return (
-      <SignalStateCard
-        title="Generating signal board."
-        detail="NovaOS is waiting for conviction, holder and wallet-behavior inputs already requested for this token."
-        pulse
-      />
-    );
-  }
-
-  if (!conviction) {
-    return (
-      <SignalStateCard
-        title="Analyze a token first to generate conviction-based signals."
-        detail="Signals are derived from the Conviction Engine, wallet behavior and structural-risk inputs. No fallback trading signal is generated without those inputs."
-      />
-    );
-  }
-
-  return (
-    <div className="mx-auto max-w-[1680px] space-y-4">
-      <TerminalSectionHeader
-        badge="Not financial advice"
-        badgeTone="purple"
-        subtitle="Actionable on-chain intelligence derived from conviction, wallet behavior, and structural risk."
-        title="Signals"
-      >
-          <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/24 px-4 py-3 lg:min-w-[260px]">
-            <TokenAvatar
-              logoUrl={resolveTokenLogo(tokenData)}
-              sizeClass="h-11 w-11"
-              token={tokenData.symbol}
-            />
-            <div className="min-w-0">
-              <p className="text-xs uppercase tracking-[0.18em] text-white/32">
-                Signal board
-              </p>
-              <p className="mt-1 truncate text-sm font-medium text-white/78">
-                {tokenData.symbol} signal board
-              </p>
-            </div>
-          </div>
-      </TerminalSectionHeader>
-
-      {(signalBoard.providerLimitReached || signalBoard.isPartial) && (
-        <div className="grid gap-3 lg:grid-cols-2">
-          {signalBoard.providerLimitReached && (
-            <SignalNotice
-              title="Provider limit surfaced"
-              detail="One or more providers reported a limit or rate restriction. Signals are generated only from state already loaded."
-              tone="warning"
-            />
-          )}
-          {signalBoard.isPartial && (
-            <SignalNotice
-              title="Partial signal coverage"
-              detail="Some inputs are missing or partial, so NovaOS marks coverage conservatively and keeps insufficient-data signals visible."
-            />
-          )}
-        </div>
-      )}
-
-      <SignalSummaryPanel model={signalBoard} />
-
-      <section>
-        <SignalSectionHeading
-          eyebrow="Signal Cards"
-          title="What matters right now"
-          description="Each card is generated deterministically from measured NovaOS inputs. No buy, sell or price target language is used."
-        />
-        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {signalBoard.signals.map((signal) => (
-            <SignalCard key={signal.id} signal={signal} />
-          ))}
-        </div>
-      </section>
-
-      <section className="grid gap-4 xl:grid-cols-2">
-        <SignalListPanel
-          emptyCopy="No major warning signal surfaced from available data."
-          signals={signalBoard.signals.filter(
-            (signal) => signal.category === "Warning"
-          )}
-          title="Risk Alerts"
-        />
-        <SignalListPanel
-          emptyCopy="No strong supportive signal surfaced from available data."
-          signals={signalBoard.signals.filter(
-            (signal) => signal.category === "Supportive"
-          )}
-          title="Opportunity Signals"
-        />
-      </section>
-
-      <SignalCoveragePanel model={signalBoard} />
-
-      <section className={terminalMethodologyClass}>
-        Signals convert existing NovaOS conviction, wallet behavior, wallet flow,
-        structural-risk and coverage inputs into conservative intelligence cards.
-        They do not calculate PnL, win rate, smart-money identity, insider
-        identity, buy or sell instructions, or future price movement.
-      </section>
-    </div>
-  );
-}
-
-function buildSignalBoardModel({
-  behaviorPreview,
-  behaviorPreviewError,
-  conviction,
-  convictionError,
-  holderError,
-  holderLoadState,
-  tokenFlowSummaryV2,
-  tokenIntelligence,
-  unifiedAnalysis,
-  walletRows,
-}: {
-  behaviorPreview: WalletBehaviorPreviewData | null;
-  behaviorPreviewError: string;
-  conviction: ExplainableConvictionData | null;
-  convictionError: string;
-  holderError: string;
-  holderLoadState: HolderLoadState;
-  tokenFlowSummaryV2?: TokenFlowSummaryV2 | null;
-  tokenIntelligence: TokenIntelligenceData | null;
-  unifiedAnalysis: UnifiedTokenAnalysisData | null;
-  walletRows: WalletRow[];
-}): SignalBoardModel {
-  const warnings = [
-    convictionError,
-    holderError,
-    behaviorPreviewError,
-    ...(conviction?.warnings || []),
-    ...(conviction?.mapperWarnings || []),
-    ...(conviction?.dataConfidence.warnings || []),
-    ...(conviction?.deepBehavior?.warnings || []),
-    ...(tokenIntelligence?.warnings || []),
-    ...(unifiedAnalysis?.warnings || []),
-  ].filter(Boolean);
-  const providerLimitReached = warnings.some(isProviderLimitMessage);
-  const modules = unifiedAnalysis?.modules ? Object.values(unifiedAnalysis.modules) : [];
-  const isPartial =
-    holderLoadState === "error" ||
-    conviction?.status === "partial" ||
-    modules.some((module) => module?.status === "failed" || module?.status === "skipped") ||
-    warnings.length > 0;
-  const signals = conviction
-    ? generateNovaSignals({
-        conviction,
-        isPartial,
-        providerLimitReached,
-        tokenFlowSummaryV2,
-        tokenIntelligence,
-      })
-    : [];
-  const counts = countSignals(signals);
-  const strongestSignal = [...signals]
-    .filter((signal) => signal.category === "Supportive")
-    .sort(compareSignalStrength)[0];
-  const strongestWarning = [...signals]
-    .filter((signal) => signal.category === "Warning")
-    .sort(compareSignalStrength)[0];
-  const verdict = deriveSignalSummaryVerdict({
-    counts,
-    isPartial,
-    strongestWarning,
-  });
-
-  return {
-    signals,
-    counts,
-    verdict: verdict.title,
-    verdictCopy: verdict.copy,
-    strongestSignal,
-    strongestWarning,
-    providerLimitReached,
-    isPartial,
-    coverage: {
-      dataConfidence: conviction
-        ? `${conviction.dataConfidence.label} (${Math.round(conviction.dataConfidence.score)}/100)`
-        : "Unavailable",
-      deepBehavior: conviction?.deepBehavior?.enabled
-        ? `${conviction.deepBehavior.analyzedWallets} wallets`
-        : "Missing",
-      holderCoverage:
-        `${conviction?.mapperCoverage.holderCount ||
-          tokenIntelligence?.analyzedWallets ||
-          walletRows.length ||
-          "Unavailable"} holders / ${
-          behaviorPreview?.summary.profiledWallets ?? 0
-        } profiles`,
-      marketCoverage: conviction?.mapperCoverage.hasMarketData
-        ? "Available"
-        : "Missing or partial",
-      providerWarnings: providerLimitReached
-        ? "Provider limit or rate warning"
-        : warnings.length
-        ? `${warnings.length} warning(s)`
-        : "None surfaced",
-      cacheState: unifiedAnalysis?.cache?.hit
-        ? "Cache hit"
-        : unifiedAnalysis
-        ? "Live or refreshed"
-        : "Unavailable",
-    },
-  };
-}
-
-function generateNovaSignals({
-  conviction,
-  isPartial,
-  providerLimitReached,
-  tokenFlowSummaryV2,
-  tokenIntelligence,
-}: {
-  conviction: ExplainableConvictionData;
-  isPartial: boolean;
-  providerLimitReached: boolean;
-  tokenFlowSummaryV2?: TokenFlowSummaryV2 | null;
-  tokenIntelligence: TokenIntelligenceData | null;
-}): NovaSignal[] {
-  const confidence = conviction.dataConfidence.label;
-  const deepSummary = conviction.deepBehavior?.summary;
-  const bundle = conviction.bundleDetection;
-  const signals: NovaSignal[] = [];
-
-  signals.push(buildConvictionSignal(conviction, confidence));
-  signals.push(buildRiskProtectionSignal(conviction, confidence));
-  signals.push(buildWalletFlowSignal(conviction, confidence, tokenFlowSummaryV2));
-  signals.push(buildHolderQualitySignal(conviction, confidence));
-  signals.push(buildLiquiditySignal(conviction, confidence));
-  signals.push(buildBundleInsiderSignal(conviction, confidence));
-  signals.push(
-    buildDataConfidenceSignal({
-      conviction,
-      isPartial,
-      providerLimitReached,
-      tokenIntelligence,
-    })
-  );
-
-  if (deepSummary?.averageDistributionPressure && deepSummary.averageDistributionPressure >= 70) {
-    signals.push({
-      id: "distribution-pressure",
-      title: "Distribution Pressure Elevated",
-      category: "Warning",
-      severity: deepSummary.averageDistributionPressure >= 82 ? "High" : "Medium",
-      confidence,
-      explanation: `Average distribution pressure is ${Math.round(deepSummary.averageDistributionPressure)}/100 across analyzed wallets.`,
-      inputs: [
-        { label: "Distribution Pressure", value: formatSignalScore(deepSummary.averageDistributionPressure) },
-        { label: "Accumulation Pressure", value: formatSignalScore(deepSummary.averageAccumulationPressure) },
-      ],
-      strength: deepSummary.averageDistributionPressure,
-    });
-  }
-
-  if (typeof bundle?.bundleRiskScore === "number" && bundle.bundleRiskScore >= 70) {
-    signals.push({
-      id: "bundle-risk-alert",
-      title: "Bundle Risk Elevated",
-      category: "Warning",
-      severity: bundle.bundleRiskScore >= 85 ? "High" : "Medium",
-      confidence,
-      explanation: `Bundle risk is ${bundle.bundleRiskScore}/100, so bundle-like holder structure is materially affecting the token profile.`,
-      inputs: [
-        { label: "Bundle Risk", value: formatSignalScore(bundle.bundleRiskScore) },
-        { label: "Fake Decentralization", value: formatSignalScore(bundle.fakeDecentralizationRisk) },
-        { label: "Detected Groups", value: bundle.detectedGroups.length },
-      ],
-      strength: bundle.bundleRiskScore,
-    });
-  }
-
-  return signals;
-}
-
-function buildConvictionSignal(
-  conviction: ExplainableConvictionData,
-  confidence: string
-): NovaSignal {
-  const score = conviction.finalConvictionScore;
-  const category: SignalCategory =
-    score >= 75 ? "Supportive" : score >= 55 ? "Neutral" : score >= 35 ? "Neutral" : "Warning";
-  const title =
-    score >= 75
-      ? "Supportive Conviction Structure"
-      : score >= 55
-      ? "Mixed Conviction Structure"
-      : score >= 35
-      ? "Weak/Mixed Conviction"
-      : "Low Conviction Structure";
-
-  return {
-    id: "conviction",
-    title,
-    category,
-    severity: score < 35 ? "High" : score < 55 ? "Medium" : "Low",
-    confidence,
-    explanation: `Final conviction is ${Math.round(score)}/100 based on current holder, wallet, liquidity and risk inputs.`,
-    inputs: [
-      { label: "Final Conviction", value: formatSignalScore(score) },
-      { label: "Data Confidence", value: confidence },
-    ],
-    strength: category === "Warning" ? 100 - score : score,
-  };
-}
-
-function buildRiskProtectionSignal(
-  conviction: ExplainableConvictionData,
-  confidence: string
-): NovaSignal {
-  const riskProtection = conviction.subScores.riskProtection;
-  const insiderRisk = conviction.subScores.insiderRisk;
-  const bundleRisk = conviction.bundleDetection?.bundleRiskScore;
-  const clusterRisk = conviction.subScores.clusterRisk;
-  const majorRisk = Math.max(insiderRisk, bundleRisk ?? 0, clusterRisk);
-  const category: SignalCategory =
-    riskProtection >= 65 && majorRisk < 45
-      ? "Supportive"
-      : riskProtection < 45 || insiderRisk >= 70 || (bundleRisk ?? 0) >= 70
-      ? "Warning"
-      : "Neutral";
-
-  return {
-    id: "risk-protection",
-    title:
-      category === "Supportive"
-        ? "Risk Protection Holding"
-        : category === "Warning"
-        ? "Risk Protection Pressure"
-        : "Mixed Risk Protection",
-    category,
-    severity: category === "Warning" && (riskProtection < 35 || majorRisk >= 80) ? "High" : category === "Neutral" ? "Low" : "Medium",
-    confidence,
-    explanation:
-      category === "Warning"
-        ? `Risk protection is ${Math.round(riskProtection)}/100 while major structural risk reaches ${Math.round(majorRisk)}/100.`
-        : `Risk protection is ${Math.round(riskProtection)}/100 against the currently measured structural risk inputs.`,
-    inputs: [
-      { label: "Risk Protection", value: formatSignalScore(riskProtection) },
-      { label: "Insider Risk", value: formatSignalScore(insiderRisk) },
-      { label: "Bundle Risk", value: formatOptionalSignalScore(bundleRisk) },
-      { label: "Cluster Risk", value: formatSignalScore(clusterRisk) },
-    ],
-    strength: category === "Warning" ? Math.max(100 - riskProtection, majorRisk) : riskProtection,
-  };
-}
-
-function buildWalletFlowSignal(
-  conviction: ExplainableConvictionData,
-  confidence: string,
-  tokenFlowSummaryV2?: TokenFlowSummaryV2 | null
-): NovaSignal {
-  if (tokenFlowSummaryV2) {
-    const summary = tokenFlowSummaryV2;
-    const warningDominant =
-      summary.dominantFlow === "Distribution Dominant" ||
-      summary.dominantFlow === "Rotation Heavy";
-    const category: SignalCategory =
-      summary.dominantFlow === "Data Limited"
-        ? "Insufficient data"
-        : summary.dominantFlow === "Accumulation Dominant"
-        ? "Supportive"
-        : warningDominant
-        ? "Warning"
-        : "Neutral";
-
-    return {
-      id: "wallet-flow",
-      title:
-        summary.dominantFlow === "Data Limited"
-          ? "Wallet Flow V2 Data Limited"
-          : summary.dominantFlow,
-      category,
-      severity:
-        category === "Warning" && Math.max(summary.distributionPressure, summary.rotationPressure) >= 80
-          ? "High"
-          : Math.abs(summary.netFlowBias) >= 20 || summary.rotationPressure >= 70
-          ? "Medium"
-          : "Low",
-      confidence,
-      explanation: summary.verdict,
-      inputs: [
-        { label: "Accumulation", value: formatSignalScore(summary.accumulationPressure) },
-        { label: "Distribution", value: formatSignalScore(summary.distributionPressure) },
-        { label: "Rotation", value: formatSignalScore(summary.rotationPressure) },
-        { label: "Dormancy", value: formatSignalScore(summary.dormancyPressure) },
-      ],
-      strength: Math.max(
-        summary.accumulationPressure,
-        summary.distributionPressure,
-        summary.rotationPressure,
-        summary.dormancyPressure
-      ),
-    };
-  }
-
-  const deep = conviction.deepBehavior?.summary;
-  const rotationRisk = deep?.averageRotationBehaviorRisk ?? conviction.subScores.rotationRisk;
-
-  if (!deep) {
-    return {
-      id: "wallet-flow",
-      title: "Wallet Flow Data Missing",
-      category: "Insufficient data",
-      severity: "Low",
-      confidence,
-      explanation: "Deep wallet behavior is not loaded, so NovaOS is not inferring accumulation or distribution pressure.",
-      inputs: [
-        { label: "Deep Behavior", value: "Missing" },
-        { label: "Rotation Risk", value: formatSignalScore(rotationRisk) },
-      ],
-      strength: 30,
-    };
-  }
-
-  const accumulation = deep.averageAccumulationPressure;
-  const distribution = deep.averageDistributionPressure;
-  const spread = Math.abs(accumulation - distribution);
-  const category: SignalCategory =
-    rotationRisk >= 70
-      ? "Warning"
-      : accumulation >= distribution + 12
-      ? "Supportive"
-      : distribution >= accumulation + 12
-      ? "Warning"
-      : "Neutral";
-
-  return {
-    id: "wallet-flow",
-    title:
-      category === "Supportive"
-        ? "Accumulation Dominant"
-        : rotationRisk >= 70
-        ? "Rotation Risk Elevated"
-        : category === "Warning"
-        ? "Distribution Pressure Leading"
-        : "Mixed Wallet Flow",
-    category,
-    severity: category === "Warning" && Math.max(rotationRisk, distribution) >= 80 ? "High" : spread >= 20 ? "Medium" : "Low",
-    confidence,
-    explanation:
-      rotationRisk >= 70
-        ? `Rotation risk is ${Math.round(rotationRisk)}/100 across analyzed wallet-flow inputs.`
-        : `Accumulation is ${Math.round(accumulation)}/100 and distribution is ${Math.round(distribution)}/100 in deep behavior.`,
-    inputs: [
-      { label: "Accumulation", value: formatSignalScore(accumulation) },
-      { label: "Distribution", value: formatSignalScore(distribution) },
-      { label: "Rotation Risk", value: formatSignalScore(rotationRisk) },
-    ],
-    strength: Math.max(accumulation, distribution, rotationRisk),
-  };
-}
-
-function buildHolderQualitySignal(
-  conviction: ExplainableConvictionData,
-  confidence: string
-): NovaSignal {
-  const holderIntegrity = conviction.subScores.holderIntegrity;
-  const walletQuality = conviction.subScores.walletQuality;
-  const category: SignalCategory =
-    holderIntegrity >= 65 && walletQuality >= 65
-      ? "Supportive"
-      : holderIntegrity < 45 || walletQuality < 45
-      ? "Warning"
-      : "Neutral";
-
-  return {
-    id: "holder-quality",
-    title:
-      category === "Supportive"
-        ? "Holder Quality Supportive"
-        : category === "Warning"
-        ? "Weak Wallet Quality"
-        : "Mixed Holder Quality",
-    category,
-    severity: category === "Warning" && Math.min(holderIntegrity, walletQuality) < 35 ? "High" : category === "Warning" ? "Medium" : "Low",
-    confidence,
-    explanation: `Holder integrity is ${Math.round(holderIntegrity)}/100 and wallet quality is ${Math.round(walletQuality)}/100.`,
-    inputs: [
-      { label: "Holder Integrity", value: formatSignalScore(holderIntegrity) },
-      { label: "Wallet Quality", value: formatSignalScore(walletQuality) },
-    ],
-    strength: category === "Warning" ? 100 - Math.min(holderIntegrity, walletQuality) : Math.max(holderIntegrity, walletQuality),
-  };
-}
-
-function buildLiquiditySignal(
-  conviction: ExplainableConvictionData,
-  confidence: string
-): NovaSignal {
-  const liquidityTrust = conviction.subScores.liquidityTrust;
-  const hasMarketData = conviction.mapperCoverage.hasMarketData;
-  const category: SignalCategory = !hasMarketData
-    ? "Insufficient data"
-    : liquidityTrust >= 65
-    ? "Supportive"
-    : liquidityTrust < 45
-    ? "Warning"
-    : "Neutral";
-
-  return {
-    id: "liquidity-trust",
-    title:
-      category === "Supportive"
-        ? "Strong Liquidity Trust"
-        : category === "Warning"
-        ? "Weak Liquidity Trust"
-        : category === "Insufficient data"
-        ? "Liquidity Coverage Missing"
-        : "Mixed Liquidity Trust",
-    category,
-    severity: category === "Warning" && liquidityTrust < 35 ? "High" : category === "Warning" ? "Medium" : "Low",
-    confidence,
-    explanation: hasMarketData
-      ? `Liquidity trust is ${Math.round(liquidityTrust)}/100 from available market coverage.`
-      : "Market coverage is missing or partial, so liquidity trust is marked data-limited.",
-    inputs: [
-      { label: "Liquidity Trust", value: formatSignalScore(liquidityTrust) },
-      { label: "Market Coverage", value: hasMarketData ? "Available" : "Missing" },
-    ],
-    strength: category === "Warning" ? 100 - liquidityTrust : liquidityTrust,
-  };
-}
-
-function buildBundleInsiderSignal(
-  conviction: ExplainableConvictionData,
-  confidence: string
-): NovaSignal {
-  const insiderRisk = conviction.subScores.insiderRisk;
-  const bundleRisk = conviction.bundleDetection?.bundleRiskScore;
-  const fakeDecentralization = conviction.bundleDetection?.fakeDecentralizationRisk;
-  const maxRisk = Math.max(insiderRisk, bundleRisk ?? 0, fakeDecentralization ?? 0);
-  const category: SignalCategory =
-    maxRisk >= 65 ? "Warning" : maxRisk <= 35 ? "Supportive" : "Neutral";
-
-  return {
-    id: "bundle-insider",
-    title:
-      category === "Warning"
-        ? "Elevated Insider or Bundle Risk"
-        : category === "Supportive"
-        ? "Low Structural Concentration Risk"
-        : "Mixed Structural Risk",
-    category,
-    severity: maxRisk >= 85 ? "High" : maxRisk >= 65 ? "Medium" : "Low",
-    confidence,
-    explanation:
-      category === "Warning"
-        ? `The strongest structural risk input is ${Math.round(maxRisk)}/100, so concentration or coordination-sensitive patterns matter right now.`
-        : `Insider, bundle and fake-decentralization inputs do not show a dominant high-risk reading from available data.`,
-    inputs: [
-      { label: "Insider Risk", value: formatSignalScore(insiderRisk) },
-      { label: "Bundle Risk", value: formatOptionalSignalScore(bundleRisk) },
-      { label: "Fake Decentralization", value: formatOptionalSignalScore(fakeDecentralization) },
-    ],
-    strength: category === "Warning" ? maxRisk : 100 - maxRisk,
-  };
-}
-
-function buildDataConfidenceSignal({
-  conviction,
-  isPartial,
-  providerLimitReached,
-  tokenIntelligence,
-}: {
-  conviction: ExplainableConvictionData;
-  isPartial: boolean;
-  providerLimitReached: boolean;
-  tokenIntelligence: TokenIntelligenceData | null;
-}): NovaSignal {
-  const confidenceScore = conviction.dataConfidence.score;
-  const confidenceLabel = conviction.dataConfidence.label;
-  const category: SignalCategory =
-    providerLimitReached || confidenceLabel === "Low"
-      ? "Insufficient data"
-      : isPartial
-      ? "Neutral"
-      : confidenceLabel === "High"
-      ? "Supportive"
-      : "Neutral";
-
-  return {
-    id: "data-confidence",
-    title:
-      category === "Supportive"
-        ? "High Signal Confidence"
-        : category === "Insufficient data"
-        ? "Low or Limited Data Confidence"
-        : "Medium Signal Confidence",
-    category,
-    severity: category === "Insufficient data" ? "Medium" : "Low",
-    confidence: confidenceLabel,
-    explanation: `Signals are only as strong as available coverage. Current data confidence is ${confidenceLabel.toLowerCase()} at ${Math.round(confidenceScore)}/100.`,
-    inputs: [
-      { label: "Data Confidence", value: formatSignalScore(confidenceScore) },
-      { label: "Holder Coverage", value: conviction.mapperCoverage.holderCount },
-      { label: "Token Intelligence", value: tokenIntelligence ? "Available" : "Missing" },
-      { label: "Partial State", value: isPartial ? "Yes" : "No" },
-    ],
-    strength: category === "Insufficient data" ? 100 - confidenceScore : confidenceScore,
-  };
-}
-
-function countSignals(signals: NovaSignal[]): Record<SignalCategory, number> {
-  return {
-    Supportive: signals.filter((signal) => signal.category === "Supportive").length,
-    Warning: signals.filter((signal) => signal.category === "Warning").length,
-    Neutral: signals.filter((signal) => signal.category === "Neutral").length,
-    "Insufficient data": signals.filter(
-      (signal) => signal.category === "Insufficient data"
-    ).length,
-  };
-}
-
-function compareSignalStrength(a: NovaSignal, b: NovaSignal) {
-  const severityWeight = { High: 300, Medium: 200, Low: 100 };
-  return severityWeight[b.severity] + b.strength - (severityWeight[a.severity] + a.strength);
-}
-
-function deriveSignalSummaryVerdict({
-  counts,
-  isPartial,
-  strongestWarning,
-}: {
-  counts: Record<SignalCategory, number>;
-  isPartial: boolean;
-  strongestWarning?: NovaSignal;
-}) {
-  if (counts["Insufficient data"] >= 3 || (isPartial && counts.Supportive <= 1)) {
-    return {
-      title: "Data-limited profile",
-      copy: "Several signal inputs are unavailable or partial, so NovaOS keeps the signal board conservative.",
-    };
-  }
-  if (counts.Warning >= 3 || strongestWarning?.severity === "High") {
-    return {
-      title: "Risk-dominant profile",
-      copy: "Warning signals are currently more important than supportive signals in the available analysis.",
-    };
-  }
-  if (counts.Supportive > 0 && counts.Warning > 0) {
-    return {
-      title: counts.Supportive >= counts.Warning ? "Supportive but risky" : "Mixed signal profile",
-      copy: "Supportive and warning inputs are both present, so attention should stay on the highest-severity risks.",
-    };
-  }
-  if (counts.Supportive > counts.Warning) {
-    return {
-      title: "Supportive profile",
-      copy: "Supportive signals dominate the available inputs, with no major warning signal leading the board.",
-    };
-  }
-  return {
-    title: "Mixed signal profile",
-    copy: "No single signal direction dominates the current NovaOS analysis.",
-  };
-}
-
-function SignalSummaryPanel({ model }: { model: SignalBoardModel }) {
-  return (
-    <section className="grid gap-4 xl:grid-cols-[0.78fr_1.22fr]">
-      <div className="rounded-[2rem] border border-cyan-100/10 bg-cyan-100/[0.025] p-5">
-        <p className="text-xs uppercase tracking-[0.24em] text-cyan-100/42">
-          Signal Summary
-        </p>
-        <h2 className="mt-3 text-2xl font-semibold tracking-[-0.055em] text-white/88">
-          {model.verdict}
-        </h2>
-        <p className="mt-3 text-sm leading-relaxed text-white/42">
-          {model.verdictCopy}
-        </p>
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
-          <FlowTinyFact
-            label="Strongest signal"
-            value={model.strongestSignal?.title || "None surfaced"}
-          />
-          <FlowTinyFact
-            label="Strongest warning"
-            value={model.strongestWarning?.title || "None surfaced"}
-          />
-        </div>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <SignalCountCard label="Total" value={model.signals.length} />
-        <SignalCountCard label="Supportive" value={model.counts.Supportive} />
-        <SignalCountCard label="Warning" value={model.counts.Warning} />
-        <SignalCountCard label="Neutral" value={model.counts.Neutral} />
-        <SignalCountCard
-          label="Insufficient"
-          value={model.counts["Insufficient data"]}
-        />
-      </div>
-    </section>
-  );
-}
-
-function SignalCard({ signal }: { signal: NovaSignal }) {
-  return (
-    <article className={`min-h-[220px] rounded-[1.5rem] border p-4 ${signalCardSurfaceClass(signal.category)}`}>
-      <div className="flex items-start justify-between gap-3">
-        <h3 className="text-base font-semibold tracking-[-0.035em] text-white/84">
-          {signal.title}
-        </h3>
-        <SignalCategoryPill category={signal.category} />
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-white/42">
-          Severity {signal.severity}
-        </span>
-        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-white/42">
-          {signal.confidence} confidence
-        </span>
-      </div>
-      <p className="mt-3 text-sm leading-relaxed text-white/42">
-        {signal.explanation}
-      </p>
-      <div className="mt-4 grid gap-2 sm:grid-cols-2">
-        {signal.inputs.map((input) => (
-          <FlowTinyFact key={`${signal.id}-${input.label}`} label={input.label} value={input.value} />
-        ))}
-      </div>
-    </article>
-  );
-}
-
-function SignalListPanel({
-  emptyCopy,
-  signals,
-  title,
-}: {
-  emptyCopy: string;
-  signals: NovaSignal[];
-  title: string;
-}) {
-  return (
-    <section className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-5 backdrop-blur-2xl">
-      <h2 className="text-xl font-semibold tracking-[-0.045em] text-white/86">
-        {title}
-      </h2>
-      <div className="mt-3 space-y-2">
-        {signals.length === 0 ? (
-          <p className="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-white/36">
-            {emptyCopy}
-          </p>
-        ) : (
-          signals.map((signal) => (
-            <div
-              key={`${title}-${signal.id}`}
-              className="rounded-2xl border border-white/[0.08] bg-black/22 p-3"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <p className="font-medium text-white/76">{signal.title}</p>
-                <span className="text-xs text-white/34">{signal.severity}</span>
-              </div>
-              <p className="mt-1 text-xs leading-relaxed text-white/35">
-                {signal.explanation}
-              </p>
-            </div>
-          ))
-        )}
-      </div>
-    </section>
-  );
-}
-
-function SignalCoveragePanel({ model }: { model: SignalBoardModel }) {
-  const coverageRows = [
-    ["Data confidence", model.coverage.dataConfidence],
-    ["Deep behavior", model.coverage.deepBehavior],
-    ["Holder coverage", model.coverage.holderCoverage],
-    ["Market coverage", model.coverage.marketCoverage],
-    ["Provider warnings", model.coverage.providerWarnings],
-    ["Cache / partial state", model.coverage.cacheState],
-  ] as const;
-
-  return (
-    <section className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-5 backdrop-blur-2xl">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-[0.24em] text-cyan-100/42">
-            Confidence / Coverage
-          </p>
-          <h2 className="mt-2 text-xl font-semibold tracking-[-0.045em] text-white/86">
-            Signal Confidence
-          </h2>
-        </div>
-        <p className="max-w-xl text-xs leading-relaxed text-white/34">
-          Signals are only as strong as the available data coverage.
-        </p>
-      </div>
-      <div className="mt-4 grid gap-2 md:grid-cols-3">
-        {coverageRows.map(([label, value]) => (
-          <FlowTinyFact key={label} label={label} value={value} />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function SignalSectionHeading({
-  description,
-  eyebrow,
-  title,
-}: {
-  description: string;
-  eyebrow: string;
-  title: string;
-}) {
-  return (
-    <div>
-      <p className="text-xs uppercase tracking-[0.3em] text-cyan-100/42">{eyebrow}</p>
-      <h2 className="mt-2 text-xl font-semibold tracking-[-0.045em] text-white/84">
-        {title}
-      </h2>
-      <p className="mt-1 text-xs leading-relaxed text-white/35">{description}</p>
-    </div>
-  );
-}
-
-function SignalCountCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: number;
-}) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-      <p className="text-[10px] uppercase tracking-[0.16em] text-white/32">{label}</p>
-      <p className="mt-3 text-2xl font-semibold tracking-[-0.055em] text-white/86">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function SignalCategoryPill({ category }: { category: SignalCategory }) {
-  return (
-    <span className={`shrink-0 rounded-full border px-3 py-1 text-[11px] ${signalCategoryClass(category)}`}>
-      {category}
-    </span>
-  );
-}
-
-function SignalNotice({
-  detail,
-  title,
-  tone = "default",
-}: {
-  detail: string;
-  title: string;
-  tone?: "default" | "warning";
-}) {
-  return (
-    <div
-      className={`rounded-2xl border p-4 ${
-        tone === "warning"
-          ? "border-amber-100/14 bg-amber-100/[0.035]"
-          : "border-white/10 bg-white/[0.03]"
-      }`}
-    >
-      <p className="text-sm font-medium text-white/76">{title}</p>
-      <p className="mt-1 text-xs leading-relaxed text-white/34">{detail}</p>
-    </div>
-  );
-}
-
-function SignalStateCard({
-  detail,
-  pulse = false,
-  title,
-}: {
-  detail: string;
-  pulse?: boolean;
-  title: string;
-}) {
-  return (
-    <TerminalStatePanel detail={detail} pulse={pulse} title={title} />
-  );
-}
-
-function formatSignalScore(value: number) {
-  return `${Math.round(value)}/100`;
-}
-
-function formatOptionalSignalScore(value?: number) {
-  return typeof value === "number" ? formatSignalScore(value) : "Unavailable";
-}
-
-function signalCategoryClass(category: SignalCategory) {
-  if (category === "Supportive") {
-    return "border-emerald-100/15 bg-emerald-100/[0.05] text-emerald-100/68";
-  }
-  if (category === "Warning") {
-    return "border-amber-100/15 bg-amber-100/[0.05] text-amber-100/66";
-  }
-  if (category === "Insufficient data") {
-    return "border-white/10 bg-white/[0.035] text-white/42";
-  }
-  return "border-cyan-100/12 bg-cyan-100/[0.045] text-cyan-100/68";
-}
-
-function signalCardSurfaceClass(category: SignalCategory) {
-  if (category === "Supportive") return "border-emerald-100/12 bg-emerald-100/[0.035]";
-  if (category === "Warning") return "border-amber-100/14 bg-amber-100/[0.035]";
-  if (category === "Insufficient data") return "border-white/10 bg-white/[0.025]";
-  return "border-cyan-100/10 bg-cyan-100/[0.025]";
-}
-
-type WatchlistSortMode =
-  | "recent"
-  | "conviction"
-  | "risk"
-  | "liquidity";
-
-type WatchlistFilterMode = "All" | "Supportive" | "Warning" | "Unknown";
-
-function WatchlistMvpSection({
-  currentTokenData,
-  items,
-  onAddCurrent,
-  onOpenItem,
-  onRemoveItem,
-  status,
-}: {
-  currentTokenData: TokenResult;
-  items: WatchlistItem[];
-  onAddCurrent: () => void;
-  onOpenItem: (item: WatchlistItem) => void;
-  onRemoveItem: (id: string) => void;
-  status: string;
-}) {
-  const [sortMode, setSortMode] = useState<WatchlistSortMode>("recent");
-  const [filterMode, setFilterMode] = useState<WatchlistFilterMode>("All");
-  const [selectedId, setSelectedId] = useState<string>("");
-  const summary = buildWatchlistSummary(items);
-  const filteredItems = filterWatchlistItems(items, filterMode);
-  const sortedItems = sortWatchlistItems(filteredItems, sortMode);
-  const selectedItem =
-    items.find((item) => item.id === selectedId) || sortedItems[0] || null;
-
-  return (
-    <div className="mx-auto max-w-[1680px] space-y-4">
-      <TerminalSectionHeader
-        badge="Local MVP"
-        subtitle="Track token conviction, structural risk, and signal snapshots locally."
-        title="Watchlist"
-      >
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={onAddCurrent}
-              className="rounded-full border border-purple-100/12 bg-purple-100/[0.045] px-4 py-2 text-xs text-purple-100/68 transition hover:bg-purple-100/[0.075]"
-            >
-              {status || "Add current token"}
-            </button>
-          </div>
-      </TerminalSectionHeader>
-
-      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-        <WatchlistSummaryCard label="Tracked Tokens" value={items.length} />
-        <WatchlistSummaryCard
-          label="Average Conviction"
-          value={summary.averageConviction}
-        />
-        <WatchlistSummaryCard
-          label="Highest Conviction"
-          value={summary.highestConviction}
-        />
-        <WatchlistSummaryCard label="Highest Risk" value={summary.highestRisk} />
-        <WatchlistSummaryCard
-          label="Recently Updated"
-          value={summary.recentlyUpdated}
-        />
-      </section>
-
-      <section className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 backdrop-blur-2xl">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-[0.24em] text-cyan-100/42">
-              Local Snapshots
-            </p>
-            <h2 className="mt-2 text-xl font-semibold tracking-[-0.045em] text-white/86">
-              Watchlist Items
-            </h2>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {[
-              ["recent", "Recently updated"],
-              ["conviction", "Conviction high"],
-              ["risk", "Risk high"],
-              ["liquidity", "Liquidity high"],
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setSortMode(value as WatchlistSortMode)}
-                className={`rounded-full border px-3 py-2 text-xs transition ${
-                  sortMode === value
-                    ? "border-cyan-100/16 bg-cyan-100/[0.06] text-cyan-100/72"
-                    : "border-white/10 bg-white/[0.025] text-white/38 hover:bg-white/[0.045]"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="mt-3 flex flex-wrap gap-2">
-          {(["All", "Supportive", "Warning", "Unknown"] as WatchlistFilterMode[]).map(
-            (filter) => (
-              <button
-                key={filter}
-                type="button"
-                onClick={() => setFilterMode(filter)}
-                className={`rounded-full border px-3 py-1.5 text-xs transition ${
-                  filterMode === filter
-                    ? "border-purple-100/16 bg-purple-100/[0.055] text-purple-100/70"
-                    : "border-white/10 bg-white/[0.025] text-white/38 hover:bg-white/[0.045]"
-                }`}
-              >
-                {filter}
-              </button>
-            )
-          )}
-        </div>
-
-        {items.length === 0 ? (
-          <div className="mt-4">
-            <TerminalStatePanel
-              title="Your watchlist is empty."
-              detail="Analyze a token and add it to your watchlist to track conviction snapshots locally."
-            />
-          </div>
-        ) : (
-          <div className="mt-4 overflow-x-auto rounded-[1.35rem] border border-white/10">
-            <div className={`grid min-w-[1120px] grid-cols-[minmax(220px,1.35fr)_minmax(120px,0.8fr)_minmax(100px,0.7fr)_minmax(110px,0.7fr)_minmax(110px,0.7fr)_minmax(92px,0.55fr)_minmax(110px,0.7fr)_minmax(155px,0.95fr)_minmax(130px,0.75fr)_minmax(230px,1.15fr)] gap-3 ${terminalTableHeaderClass}`}>
-              <span>Token</span>
-              <span>Chain / Dex</span>
-              <span>Price</span>
-              <span>Market Cap</span>
-              <span>Liquidity</span>
-              <span>Conviction</span>
-              <span>Confidence</span>
-              <span>Risk</span>
-              <span>Updated</span>
-              <span>Actions</span>
-            </div>
-            <div>
-              {sortedItems.map((item) => (
-                <WatchlistRow
-                  currentTokenData={currentTokenData}
-                  isSelected={selectedItem?.id === item.id}
-                  item={item}
-                  key={item.id}
-                  onOpenItem={onOpenItem}
-                  onRemoveItem={onRemoveItem}
-                  onSelectItem={setSelectedId}
-                  onUpdateCurrent={onAddCurrent}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-      </section>
-
-      <WatchlistDetailPanel item={selectedItem} />
-
-      <section className={terminalMethodologyClass}>
-        Watchlist MVP stores local snapshots in your browser. Values do not
-        auto-refresh yet. Re-analyze a token to update its latest snapshot.
-      </section>
-    </div>
-  );
-}
-
-function WatchlistRow({
-  currentTokenData,
-  isSelected,
-  item,
-  onOpenItem,
-  onRemoveItem,
-  onSelectItem,
-  onUpdateCurrent,
-}: {
-  currentTokenData: TokenResult;
-  isSelected: boolean;
-  item: WatchlistItem;
-  onOpenItem: (item: WatchlistItem) => void;
-  onRemoveItem: (id: string) => void;
-  onSelectItem: (id: string) => void;
-  onUpdateCurrent: () => void;
-}) {
-  const canUpdate = sameWatchlistToken(item, currentTokenData);
-  const risk = watchlistRiskLevel(item);
-
-  return (
-    <div
-      className={`grid min-h-[72px] min-w-[1120px] grid-cols-[minmax(220px,1.35fr)_minmax(120px,0.8fr)_minmax(100px,0.7fr)_minmax(110px,0.7fr)_minmax(110px,0.7fr)_minmax(92px,0.55fr)_minmax(110px,0.7fr)_minmax(155px,0.95fr)_minmax(130px,0.75fr)_minmax(230px,1.15fr)] items-center gap-3 ${terminalRowClass} ${
-        isSelected ? "bg-cyan-100/[0.035]" : ""
-      }`}
-    >
-      <button
-        type="button"
-        onClick={() => onSelectItem(item.id)}
-        className="flex min-w-0 items-center gap-3 text-left"
-      >
-        <TokenAvatar
-          logoUrl={item.tokenLogo}
-          sizeClass="h-10 w-10"
-          token={item.tokenSymbol}
-        />
-        <div className="min-w-0">
-          <p className="truncate font-medium text-white/78">{item.tokenSymbol}</p>
-          <p className="mt-0.5 truncate text-xs text-white/32">{item.tokenName}</p>
-        </div>
-      </button>
-      <span className="truncate text-white/46">
-        {chainLabel(item.chain)} / {item.dex}
-      </span>
-      <span className="truncate tabular-nums text-white/58">{item.price}</span>
-      <span className="truncate tabular-nums text-white/58">{item.marketCap}</span>
-      <span className="truncate tabular-nums text-white/58">{item.liquidity}</span>
-      <span className="tabular-nums text-cyan-100/70">
-        {formatWatchlistScore(item.finalConviction)}
-      </span>
-      <span className="truncate text-white/48">{item.dataConfidence || "Unknown"}</span>
-      <span className={`w-fit rounded-full border px-3 py-1 text-xs ${watchlistRiskClass(risk)}`}>
-        {risk}
-      </span>
-      <span className="truncate text-xs text-white/35">
-        {formatWatchlistTime(item.lastUpdatedAt)}
-      </span>
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => onOpenItem(item)}
-          className="rounded-full border border-cyan-100/12 bg-cyan-100/[0.04] px-3 py-1.5 text-xs text-cyan-100/64 transition hover:bg-cyan-100/[0.07]"
-        >
-          Analyze/Open
-        </button>
-        <button
-          type="button"
-          onClick={onUpdateCurrent}
-          disabled={!canUpdate}
-          className={`rounded-full border px-3 py-1.5 text-xs transition ${
-            canUpdate
-              ? "border-purple-100/12 bg-purple-100/[0.04] text-purple-100/64 hover:bg-purple-100/[0.07]"
-              : "cursor-not-allowed border-white/8 bg-white/[0.02] text-white/24"
-          }`}
-        >
-          Update
-        </button>
-        <button
-          type="button"
-          onClick={() => onRemoveItem(item.id)}
-          className="rounded-full border border-white/10 bg-white/[0.025] px-3 py-1.5 text-xs text-white/42 transition hover:bg-white/[0.05]"
-        >
-          Remove
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function WatchlistDetailPanel({ item }: { item: WatchlistItem | null }) {
-  if (!item) {
-    return (
-      <section className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-5 text-sm text-white/36">
-        Selected token snapshot detail will appear after a token is added.
-      </section>
-    );
-  }
-
-  const facts = [
-    ["Final Conviction", formatWatchlistScore(item.finalConviction)],
-    ["Holder Integrity", formatWatchlistScore(item.holderIntegrity)],
-    ["Wallet Quality", formatWatchlistScore(item.walletQuality)],
-    ["Risk Protection", formatWatchlistScore(item.riskProtection)],
-    ["Insider Risk", formatWatchlistScore(item.insiderRisk)],
-    ["Bundle Risk", formatWatchlistScore(item.bundleRisk)],
-    ["Cluster Risk", formatWatchlistScore(item.clusterRisk)],
-    ["Latest Signal Verdict", item.latestSignalVerdict || "Unavailable"],
-  ] as const;
-
-  return (
-    <section className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-5 backdrop-blur-2xl">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-center gap-3">
-          <TokenAvatar
-            logoUrl={item.tokenLogo}
-            sizeClass="h-11 w-11"
-            token={item.tokenSymbol}
-          />
-          <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.24em] text-cyan-100/42">
-              Selected Snapshot
-            </p>
-            <h2 className="mt-1 truncate text-xl font-semibold tracking-[-0.045em] text-white/86">
-              {item.tokenSymbol} local snapshot
-            </h2>
-          </div>
-        </div>
-        <span className={`w-fit rounded-full border px-3 py-1 text-xs ${watchlistRiskClass(watchlistRiskLevel(item))}`}>
-          {watchlistRiskLevel(item)}
-        </span>
-      </div>
-      <div className="mt-4 grid gap-2 md:grid-cols-4">
-        {facts.map(([label, value]) => (
-          <FlowTinyFact key={label} label={label} value={value} />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function WatchlistSummaryCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-      <p className="text-[10px] uppercase tracking-[0.16em] text-white/32">{label}</p>
-      <p className="mt-3 truncate text-lg font-semibold tracking-[-0.045em] text-white/86">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function buildWatchlistSummary(items: WatchlistItem[]) {
-  const convictionItems = items.filter(
-    (item) => typeof item.finalConviction === "number"
-  );
-  const averageConviction = convictionItems.length
-    ? `${Math.round(
-        convictionItems.reduce(
-          (sum, item) => sum + (item.finalConviction || 0),
-          0
-        ) / convictionItems.length
-      )}/100`
-    : "0";
-  const highestConviction = [...convictionItems].sort(
-    (a, b) => (b.finalConviction || 0) - (a.finalConviction || 0)
-  )[0];
-  const highestRisk = [...items].sort(
-    (a, b) => watchlistRiskScore(b) - watchlistRiskScore(a)
-  )[0];
-  const recentlyUpdated = [...items].sort(
-    (a, b) => Date.parse(b.lastUpdatedAt) - Date.parse(a.lastUpdatedAt)
-  )[0];
-
-  return {
-    averageConviction,
-    highestConviction: highestConviction
-      ? `${highestConviction.tokenSymbol} ${formatWatchlistScore(
-          highestConviction.finalConviction
-        )}`
-      : "None",
-    highestRisk: highestRisk ? `${highestRisk.tokenSymbol} ${watchlistRiskLevel(highestRisk)}` : "None",
-    recentlyUpdated: recentlyUpdated ? recentlyUpdated.tokenSymbol : "None",
-  };
-}
-
-function filterWatchlistItems(
-  items: WatchlistItem[],
-  filterMode: WatchlistFilterMode
-) {
-  if (filterMode === "All") return items;
-  if (filterMode === "Unknown") {
-    return items.filter((item) => !item.latestSignalVerdict);
-  }
-  return items.filter((item) =>
-    (item.latestSignalVerdict || "").toLowerCase().includes(filterMode.toLowerCase())
-  );
-}
-
-function sortWatchlistItems(items: WatchlistItem[], sortMode: WatchlistSortMode) {
-  return [...items].sort((a, b) => {
-    if (sortMode === "conviction") {
-      return (b.finalConviction ?? -1) - (a.finalConviction ?? -1);
-    }
-    if (sortMode === "risk") return watchlistRiskScore(b) - watchlistRiskScore(a);
-    if (sortMode === "liquidity") {
-      return parseMoneyValue(b.liquidity) - parseMoneyValue(a.liquidity);
-    }
-    return Date.parse(b.lastUpdatedAt) - Date.parse(a.lastUpdatedAt);
-  });
-}
-
-function watchlistRiskLevel(item: WatchlistItem) {
-  const insiderRisk = item.insiderRisk;
-  const bundleRisk = item.bundleRisk;
-  const clusterRisk = item.clusterRisk;
-  const risks = [insiderRisk, bundleRisk, clusterRisk].filter(
-    (risk): risk is number => typeof risk === "number" && Number.isFinite(risk)
-  );
-
-  if (risks.length === 0) return "Unknown";
-  if ((insiderRisk ?? 0) >= 90 || (bundleRisk ?? 0) >= 90) return "Critical risk";
-  if (
-    (insiderRisk ?? 0) >= 75 ||
-    (clusterRisk ?? 0) >= 70 ||
-    (bundleRisk ?? 0) >= 70
-  ) {
-    return "Elevated risk";
-  }
-  if (risks.some((risk) => risk >= 45)) return "Moderate risk";
-  return "Low risk";
-}
-
-function watchlistRiskScore(item: WatchlistItem) {
-  return Math.max(item.insiderRisk ?? 0, item.bundleRisk ?? 0, item.clusterRisk ?? 0);
-}
-
-function watchlistRiskClass(risk: string) {
-  if (risk === "Critical risk") return "border-red-100/16 bg-red-100/[0.05] text-red-100/68";
-  if (risk === "Elevated risk") return "border-amber-100/16 bg-amber-100/[0.05] text-amber-100/68";
-  if (risk === "Moderate risk") return "border-cyan-100/12 bg-cyan-100/[0.045] text-cyan-100/66";
-  if (risk === "Low risk") return "border-emerald-100/14 bg-emerald-100/[0.045] text-emerald-100/66";
-  return "border-white/10 bg-white/[0.035] text-white/42";
-}
-
-function formatWatchlistScore(value?: number) {
-  return typeof value === "number" && Number.isFinite(value)
-    ? `${Math.round(value)}/100`
-    : "N/A";
-}
-
-function formatWatchlistTime(value: string) {
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) return "Unknown";
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(parsed));
+  if (score >= 75) return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-soft)]";
+  if (score >= 45) return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-warning)]";
+  return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-accent-soft)]";
 }
 
 function parseMoneyValue(value: string) {
@@ -11656,57 +12973,6 @@ function parseMoneyValue(value: string) {
     : 1;
   const parsed = Number(normalized.replace(/[bmk]$/, ""));
   return Number.isFinite(parsed) ? parsed * multiplier : 0;
-}
-
-function sameWatchlistToken(item: WatchlistItem, tokenData: TokenResult) {
-  return (
-    item.chain.toLowerCase() === tokenData.chain.toLowerCase() &&
-    Boolean(item.tokenAddress) &&
-    item.tokenAddress.toLowerCase() === (tokenData.tokenAddress || "").toLowerCase()
-  );
-}
-
-function readStoredWatchlistItems() {
-  if (typeof window === "undefined") return [];
-
-  try {
-    const stored = window.localStorage.getItem(WATCHLIST_STORAGE_KEY);
-    if (!stored) return [];
-    const parsed = JSON.parse(stored);
-    return Array.isArray(parsed) ? parsed.filter(isWatchlistItem) : [];
-  } catch {
-    return [];
-  }
-}
-
-function isWatchlistItem(value: unknown): value is WatchlistItem {
-  if (!value || typeof value !== "object") return false;
-  const item = value as Partial<WatchlistItem>;
-  return Boolean(
-    item.id &&
-      item.tokenSymbol &&
-      item.chain &&
-      item.tokenAddress &&
-      item.addedAt &&
-      item.lastUpdatedAt
-  );
-}
-
-function PlaceholderSection({ section }: { section: TerminalSection }) {
-  return (
-    <SectionShell
-      eyebrow={section}
-      title={`${section} foundation`}
-      description="This terminal section is reserved for a future focused workflow while the core intelligence systems remain available in the active modules."
-    >
-      <Panel title="Module Pending" tag="Planned">
-        <p className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm leading-relaxed text-white/38">
-          {section} is intentionally a placeholder in this information
-          architecture pass. No fake data has been added.
-        </p>
-      </Panel>
-    </SectionShell>
-  );
 }
 
 function OverviewTopHoldersTable({
@@ -11756,30 +13022,30 @@ function OverviewTopHoldersTable({
   }
 
   return (
-    <section className="mt-4 overflow-hidden rounded-[2rem] border border-white/10 bg-[#06080c]/88 p-4 shadow-[0_26px_90px_rgba(0,0,0,0.24)] backdrop-blur-2xl">
+    <section className="mt-4 overflow-hidden rounded-[2rem] nova-card-inner p-4 shadow-[0_26px_90px_rgba(0,0,0,0.24)] backdrop-blur-2xl">
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-xs uppercase tracking-[0.32em] text-cyan-100/40">
+          <p className="text-xs uppercase tracking-[0.32em] text-[color:var(--nova-accent-soft)]">
             Holder Intelligence
           </p>
-          <h2 className="mt-1 text-xl font-semibold tracking-[-0.05em] text-white/88">
+          <h2 className="mt-1 text-xl font-semibold tracking-[-0.05em] text-[color:var(--nova-text)]">
             Top 10 Holders
           </h2>
-          <p className="mt-1 text-xs leading-relaxed text-white/35">
+          <p className="mt-1 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
             Live holder facts with V2 behavior shown only where profiled.
           </p>
         </div>
         <button
           type="button"
           onClick={onViewFull}
-          className="w-fit rounded-full border border-cyan-100/12 bg-cyan-100/[0.045] px-4 py-2 text-xs text-cyan-100/66 transition hover:bg-cyan-100/[0.075]"
+          className="w-fit rounded-full nova-card-inner px-4 py-2 text-xs text-[color:var(--nova-accent-soft)] transition hover:nova-card-inner"
         >
           View full Top 100
         </button>
       </div>
 
-      <div className="overflow-hidden rounded-[1.35rem] border border-white/10">
-        <div className={`grid ${overviewHolderGridClass} gap-3 border-b border-white/10 bg-black/35 px-4 py-3 text-[10px] uppercase tracking-[0.1em] text-white/32`}>
+      <div className="overflow-hidden rounded-[1.35rem] border border-[color:var(--nova-border)]">
+        <div className={`grid ${overviewHolderGridClass} gap-3 border-b border-[color:var(--nova-border)] nova-card-inner px-4 py-3 text-[10px] uppercase tracking-[0.1em] text-[color:var(--nova-text-muted)]`}>
           <span className="truncate">Rank</span>
           <span className="truncate">Wallet</span>
           <span className="truncate">Balance</span>
@@ -11840,9 +13106,9 @@ function OverviewTopHoldersTable({
                     onSelectWallet(row, matchedProfile);
                   }
                 }}
-                className={`group grid ${overviewHolderGridClass} cursor-pointer items-center gap-3 border-b border-white/[0.055] px-4 py-2.5 text-left text-[13px] transition hover:bg-cyan-100/[0.025] focus:outline-none focus:ring-1 focus:ring-inset focus:ring-cyan-100/20`}
+                className={`group grid ${overviewHolderGridClass} cursor-pointer items-center gap-3 border-b border-[color:rgba(83,104,120,0.12)] px-4 py-2.5 text-left text-[13px] transition hover:nova-card-inner focus:outline-none focus:ring-1 focus:ring-inset focus:ring-[rgba(83,104,120,0.2)]`}
               >
-                <span className="text-white/30">{row.rank}</span>
+                <span className="text-[color:var(--nova-text-muted)]">{row.rank}</span>
                 <div className="min-w-0">
                   <WalletAddressCopy
                     address={row.fullAddress}
@@ -11851,8 +13117,8 @@ function OverviewTopHoldersTable({
                     onCopy={copyWalletAddress}
                   />
                 </div>
-                <span className="truncate text-white/52">{row.balance}</span>
-                <span className="font-medium text-cyan-100/68">
+                <span className="truncate text-[color:var(--nova-text-soft)]">{row.balance}</span>
+                <span className="font-medium text-[color:var(--nova-accent)]">
                   {row.ownershipPercentage}
                 </span>
                 <div className="flex justify-center">
@@ -11888,7 +13154,7 @@ function OverviewTopHoldersSkeleton() {
       {Array.from({ length: 6 }).map((_, index) => (
         <div
           key={index}
-          className={`grid ${overviewHolderGridClass} items-center gap-2 border-b border-white/[0.055] px-4 py-2.5`}
+          className={`grid ${overviewHolderGridClass} items-center gap-2 border-b border-[color:rgba(83,104,120,0.12)] px-4 py-2.5`}
         >
           <SkeletonLine className="h-3 w-5" />
           <div>
@@ -11908,6 +13174,22 @@ function OverviewTopHoldersSkeleton() {
     </div>
   );
 }
+
+const OVERVIEW_IA_REMOVED_SECTIONS = [
+  AIThesis,
+  ConvictionRing,
+  OverviewScoreOrb,
+  OverviewTopHoldersTable,
+  buildExplainableIntelligenceReport,
+  visiblePrimaryConvictionScore,
+  NovaResearchSectionCard,
+  NovaTopContributorsPanel,
+  walletFlowOverviewSubtitle,
+  pillarReasonDetail,
+  buildNovaPillarAnalyses,
+  NovaConvictionPillarAnalysisCard,
+];
+void OVERVIEW_IA_REMOVED_SECTIONS;
 
 function WalletAddressCopy({
   address,
@@ -11939,11 +13221,11 @@ function WalletAddressCopy({
         aria-hidden="true"
         animate={{ opacity: copied ? 1 : 0 }}
         transition={{ duration: 0.22, ease: "easeOut" }}
-        className="pointer-events-none absolute -top-4 left-0 rounded-full border border-cyan-100/10 bg-cyan-100/[0.045] px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] text-cyan-100/58 shadow-[0_0_18px_rgba(34,211,238,0.08)]"
+        className="pointer-events-none absolute -top-4 left-0 rounded-full nova-card-inner px-2 py-0.5 text-[9px] uppercase tracking-[0.16em] text-[color:var(--nova-accent-soft)] shadow-[0_0_18px_rgba(83,104,120,0.08)]"
       >
         Copied
       </motion.span>
-      <span className="block truncate font-mono text-[13px] font-medium text-white/82 transition group-hover/address:text-cyan-100/82">
+      <span className="block truncate font-mono text-[13px] font-medium text-[color:var(--nova-text)] transition group-hover/address:text-[color:var(--nova-accent)]">
         {displayAddress}
       </span>
       {copied && (
@@ -11964,7 +13246,7 @@ function CompactHolderState({
 }) {
   return (
     <div className="flex min-h-[156px] items-center justify-center px-6 text-center">
-      <p className={tone === "error" ? "text-sm text-red-100/60" : "text-sm text-white/38"}>
+      <p className={tone === "error" ? "text-sm text-[color:var(--nova-danger)]" : "text-sm text-[color:var(--nova-text-muted)]"}>
         {children}
       </p>
     </div>
@@ -11979,9 +13261,9 @@ function BehaviorMetric({
   value: number | string | null | undefined;
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2.5">
-      <p className="text-xs text-white/35">{label}</p>
-      <p className="mt-1 text-lg font-semibold tracking-[-0.05em] text-white/82">
+    <div className="rounded-2xl nova-card-inner px-3 py-2.5">
+      <p className="text-xs text-[color:var(--nova-text-muted)]">{label}</p>
+      <p className="mt-1 text-lg font-semibold tracking-[-0.05em] text-[color:var(--nova-text)]">
         {formatScoreValue(value, "N/A")}
       </p>
     </div>
@@ -11995,14 +13277,14 @@ function WalletBehaviorPreviewSkeleton() {
         {Array.from({ length: 4 }).map((_, index) => (
           <div
             key={index}
-            className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2.5"
+            className="rounded-2xl nova-card-inner px-3 py-2.5"
           >
             <SkeletonLine className="h-2 w-20" />
             <SkeletonLine className="mt-3 h-5 w-14" />
           </div>
         ))}
       </div>
-      <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+      <div className="rounded-2xl nova-card-inner p-3">
         <SkeletonLine className="h-2 w-24" />
         <SkeletonLine className="mt-3 h-3 w-36" />
       </div>
@@ -12025,15 +13307,15 @@ function BehaviorPreviewState({
   tone?: "default" | "error";
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-xs leading-relaxed">
+    <div className="rounded-2xl nova-card-inner p-3 text-xs leading-relaxed">
       {pulse && (
         <motion.div
           animate={{ opacity: [0.35, 1, 0.35] }}
           transition={{ duration: 1.3, repeat: Infinity, ease: "easeInOut" }}
-          className="mb-3 h-1.5 w-20 rounded-full bg-cyan-100/35"
+          className="mb-3 h-1.5 w-20 rounded-full bg-[rgba(83,104,120,0.28)]"
         />
       )}
-      <p className={tone === "error" ? "text-red-100/55" : "text-white/35"}>
+      <p className={tone === "error" ? "text-[color:var(--nova-danger)]" : "text-[color:var(--nova-text-muted)]"}>
         {children}
       </p>
     </div>
@@ -12051,12 +13333,12 @@ function Panel({
 }) {
   return (
     <div className={`relative overflow-hidden p-4 ${terminalSurfaceClass}`}>
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(1,44,59,0.16),transparent_60%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(83,104,120,0.08),transparent_60%)]" />
       <div className="relative">
         <div className="mb-4 flex items-center justify-between">
           <p className="font-medium">{title}</p>
           {tag && (
-            <span className="rounded-full border border-cyan-100/10 bg-cyan-100/[0.035] px-3 py-1 text-xs text-cyan-100/55">
+            <span className="rounded-full nova-card-inner px-3 py-1 text-xs text-[color:var(--nova-accent-soft)]">
               {tag}
             </span>
           )}
@@ -12104,21 +13386,21 @@ function StableWalletIntelligenceTable({
   }, [holderIntelligenceMatrix]);
 
   return (
-    <section className="rounded-[2rem] border border-white/10 bg-[#06080c]/90 p-5 shadow-[0_30px_120px_rgba(0,0,0,0.28)] backdrop-blur-2xl">
+    <section className="rounded-[2rem] nova-card-inner p-5 shadow-[0_30px_120px_rgba(0,0,0,0.28)] backdrop-blur-2xl">
       <div className="mb-5 flex items-center justify-between">
         <div>
-          <p className="text-xs uppercase tracking-[0.35em] text-cyan-100/40">
+          <p className="text-xs uppercase tracking-[0.35em] text-[color:var(--nova-accent-soft)]">
             Holder Intelligence
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <h2 className="text-2xl font-semibold tracking-[-0.05em]">
               Top Holder Intelligence
             </h2>
-            <span className="rounded-full border border-cyan-100/10 bg-cyan-100/[0.045] px-3 py-1 text-xs text-cyan-100/60">
+            <span className="rounded-full nova-card-inner px-3 py-1 text-xs text-[color:var(--nova-accent-soft)]">
               Top holders
             </span>
           </div>
-          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-white/35">
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[color:var(--nova-text-muted)]">
             A clean holder-level read from loaded ownership and Holder
             Intelligence evidence.
           </p>
@@ -12126,7 +13408,7 @@ function StableWalletIntelligenceTable({
 
       </div>
 
-      <div className="w-full overflow-x-auto rounded-[1.4rem] border border-white/10">
+      <div className="w-full overflow-x-auto rounded-[1.4rem] border border-[color:var(--nova-border)]">
         <div className={`grid min-h-[42px] w-full min-w-[760px] ${fullHolderGridClass} items-center gap-3 ${terminalTableHeaderClass}`}>
           <span>Wallet</span>
           <span className="text-center">Ownership</span>
@@ -12157,8 +13439,8 @@ function StableWalletIntelligenceTable({
 
           {isEmptyLoaded && (
             <HolderStateMessage
-              title="No holders were returned for this token."
-              detail="This can happen when the chain is unsupported or the provider has no indexed holder list."
+              title="No analyzed holder wallets are available."
+              detail="Holder intelligence will appear after analysis completes."
             />
           )}
 
@@ -12179,7 +13461,7 @@ function StableWalletIntelligenceTable({
               viewport={{ once: true }}
               transition={{ duration: 0.35, delay: Math.min(index * 0.012, 0.18) }}
               onClick={() => onSelectWallet(row, matchedProfile)}
-              className={`group grid min-h-[60px] w-full ${fullHolderGridClass} items-center gap-3 text-left text-[13px] focus:outline-none focus:ring-1 focus:ring-inset focus:ring-cyan-100/20 ${terminalRowClass}`}
+              className={`group grid min-h-[60px] w-full ${fullHolderGridClass} items-center gap-3 text-left text-[13px] focus:outline-none focus:ring-1 focus:ring-inset focus:ring-[rgba(83,104,120,0.2)] ${terminalRowClass}`}
             >
               <div className="flex min-w-0 items-center gap-3">
                 <motion.span
@@ -12191,37 +13473,37 @@ function StableWalletIntelligenceTable({
                   }}
                   className={`h-2 w-2 shrink-0 rounded-full ${
                     row.color === "red"
-                      ? "bg-red-300 shadow-[0_0_14px_rgba(255,120,120,0.9)]"
+                      ? "bg-[var(--nova-danger)] shadow-[0_0_14px_rgba(83,104,120,0.34)]"
                       : row.color === "amber"
-                      ? "bg-amber-300 shadow-[0_0_14px_rgba(255,190,80,0.9)]"
+                      ? "bg-[var(--nova-warning)] shadow-[0_0_14px_rgba(83,104,120,0.28)]"
                       : row.color === "purple"
-                      ? "bg-purple-300 shadow-[0_0_14px_rgba(190,150,255,0.85)]"
-                      : "bg-cyan-200 shadow-[0_0_14px_rgba(180,240,255,0.9)]"
+                      ? "bg-[var(--nova-accent-soft)] shadow-[0_0_14px_rgba(83,104,120,0.28)]"
+                      : "bg-[var(--nova-accent)] shadow-[0_0_14px_rgba(83,104,120,0.3)]"
                   }`}
                 />
 
                 <div className="min-w-0">
-                  <p className="truncate font-mono font-medium text-white/78">
+                  <p className="truncate font-mono font-medium text-[color:var(--nova-text)]">
                     {row.fullAddress ? shortInsiderWalletAddress(row.fullAddress) : row.wallet}
                   </p>
-                  <p className="mt-0.5 truncate text-[11px] text-white/32">
+                  <p className="mt-0.5 truncate text-[11px] text-[color:var(--nova-text-muted)]">
                     #{row.rank} {row.label || "Holder wallet"}
                   </p>
                 </div>
               </div>
 
-              <span className="text-center font-medium tabular-nums text-cyan-100/72">
+              <span className="text-center font-medium tabular-nums text-[color:var(--nova-accent)]">
                 {row.ownershipPercentage}
               </span>
-              <span className="truncate text-center text-white/58">
+              <span className="truncate text-center text-[color:var(--nova-text-soft)]">
                 {matchedHolderProfile?.holderClass ||
                   (matchedProfile ? behaviorBadgeLabel(matchedProfile) : "Insufficient evidence.")}
               </span>
-              <span className="truncate text-center text-white/58">
+              <span className="truncate text-center text-[color:var(--nova-text-soft)]">
                 {matchedHolderProfile?.riskTier ||
                   (matchedProfile ? holderRiskHint(row, matchedProfile, false) : "Insufficient evidence.")}
               </span>
-              <span className="text-center font-medium tabular-nums text-cyan-100/72">
+              <span className="text-center font-medium tabular-nums text-[color:var(--nova-accent)]">
                 {typeof matchedHolderProfile?.overallHolderScore === "number"
                   ? matchedHolderProfile.overallHolderScore
                   : "Insufficient evidence."}
@@ -12247,10 +13529,10 @@ function HolderStateMessage({
   return (
     <div className="flex min-h-[280px] items-center justify-center px-6 text-center">
       <div>
-        <p className={`text-sm ${tone === "error" ? "text-red-100/65" : "text-white/45"}`}>
+        <p className={`text-sm ${tone === "error" ? "text-[color:var(--nova-danger)]" : "text-[color:var(--nova-text-soft)]"}`}>
           {title}
         </p>
-        <p className="mt-2 max-w-xl text-xs text-white/25">{detail}</p>
+        <p className="mt-2 max-w-xl text-xs text-[color:var(--nova-text-muted)]">{detail}</p>
       </div>
     </div>
   );
@@ -12262,7 +13544,7 @@ function HolderTableSkeleton() {
       {Array.from({ length: 8 }).map((_, index) => (
         <div
           key={index}
-          className={`grid min-h-[60px] w-full min-w-[760px] ${fullHolderGridClass} items-center gap-3 border-b border-white/[0.055] px-4 py-3`}
+          className={`grid min-h-[60px] w-full min-w-[760px] ${fullHolderGridClass} items-center gap-3 border-b border-[color:rgba(83,104,120,0.12)] px-4 py-3`}
         >
           <div className="flex items-center gap-3">
             <SkeletonLine className="h-2 w-2 rounded-full" />
@@ -12277,7 +13559,7 @@ function HolderTableSkeleton() {
           <SkeletonLine className="mx-auto h-3 w-12" />
         </div>
       ))}
-      <p className="px-4 py-4 text-xs text-white/28">
+      <p className="px-4 py-4 text-xs text-[color:var(--nova-text-muted)]">
         Loading holder intelligence...
       </p>
     </div>
@@ -12291,7 +13573,7 @@ function V2BehaviorBadge({
 }) {
   if (!profile) {
     return (
-      <span className="inline-flex max-w-full justify-center rounded-full border border-white/10 bg-white/[0.035] px-3 py-1 text-center text-xs text-white/45">
+      <span className="inline-flex max-w-full justify-center rounded-full nova-card-inner px-3 py-1 text-center text-xs text-[color:var(--nova-text-soft)]">
         Pending V2
       </span>
     );
@@ -12322,7 +13604,7 @@ function PersonalityTableCell({
 
   if (!personality) {
     return (
-      <span className="inline-flex max-w-full justify-center rounded-full border border-white/10 bg-white/[0.035] px-3 py-1 text-center text-xs text-white/40">
+      <span className="inline-flex max-w-full justify-center rounded-full nova-card-inner px-3 py-1 text-center text-xs text-[color:var(--nova-text-soft)]">
         {isUnavailable ? "Pending" : "Open drawer"}
       </span>
     );
@@ -12338,7 +13620,7 @@ function PersonalityTableCell({
       >
         <span className="truncate">{personality.personalityType}</span>
       </span>
-      <p className="mt-1 text-[11px] text-white/30">
+      <p className="mt-1 text-[11px] text-[color:var(--nova-text-muted)]">
         {personality.confidenceLabel} confidence
       </p>
     </div>
@@ -12352,22 +13634,22 @@ function personalityBadgeClass(
     personalityType === "Rotation Hunter" ||
     personalityType === "High Activity Trader"
   ) {
-    return "border-amber-100/14 bg-amber-100/[0.045] text-amber-100/62";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-warning)]";
   }
 
   if (personalityType === "Conviction Accumulator") {
-    return "border-emerald-100/15 bg-emerald-100/[0.05] text-emerald-100/68";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-success)]";
   }
 
   if (personalityType === "Contract/System Wallet") {
-    return "border-purple-100/15 bg-purple-100/[0.05] text-purple-100/65";
+    return "border-[color:var(--nova-border)] bg-[rgba(94,114,107,0.08)] text-[color:var(--nova-accent-soft)]";
   }
 
   if (personalityType === "Insufficient Data") {
-    return "border-white/10 bg-white/[0.035] text-white/45";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-soft)]";
   }
 
-  return "border-cyan-100/10 bg-cyan-100/[0.045] text-cyan-100/70";
+  return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-accent)]";
 }
 
 function behaviorBadgeLabel(profile: WalletBehaviorProfile) {
@@ -12382,22 +13664,22 @@ function behaviorBadgeClass(profile: WalletBehaviorProfile) {
   const label = behaviorBadgeLabel(profile);
 
   if (label === "Contract") {
-    return "border-purple-100/15 bg-purple-100/[0.05] text-purple-100/65";
+    return "border-[color:var(--nova-border)] bg-[rgba(94,114,107,0.08)] text-[color:var(--nova-accent-soft)]";
   }
 
   if (label === "Dormant") {
-    return "border-amber-100/15 bg-amber-100/[0.05] text-amber-100/65";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-warning)]";
   }
 
   if (label === "Concentrated") {
-    return "border-red-100/15 bg-red-100/[0.045] text-red-100/62";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-danger)]";
   }
 
   if (label === "High Activity") {
-    return "border-emerald-100/15 bg-emerald-100/[0.05] text-emerald-100/68";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-success)]";
   }
 
-  return "border-cyan-100/10 bg-cyan-100/[0.045] text-cyan-100/70";
+  return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-accent)]";
 }
 
 function ScoreCell({
@@ -12411,14 +13693,14 @@ function ScoreCell({
 }) {
   if (typeof value === "number") {
     return (
-      <span className={`font-medium tabular-nums text-cyan-100/70 ${centered ? "text-center" : ""}`}>
+      <span className={`font-medium tabular-nums text-[color:var(--nova-accent)] ${centered ? "text-center" : ""}`}>
         {value}
       </span>
     );
   }
 
   return (
-    <span className={`truncate text-xs text-white/35 ${centered ? "text-center" : ""}`}>
+    <span className={`truncate text-xs text-[color:var(--nova-text-muted)] ${centered ? "text-center" : ""}`}>
       {fallback || "—"}
     </span>
   );
@@ -12426,14 +13708,6 @@ function ScoreCell({
 
 function WalletDetailDrawer({
   selected,
-  chain,
-  loadState,
-  transactionData,
-  transactionError,
-  transactionLoadState,
-  walletMemory,
-  walletMemoryError,
-  walletMemoryLoadState,
   walletPersonality,
   walletPersonalityError,
   walletPersonalityLoadState,
@@ -12453,13 +13727,6 @@ function WalletDetailDrawer({
   walletPersonalityLoadState: HolderLoadState;
   onClose: () => void;
 }) {
-  const [copiedAddress, setCopiedAddress] = useState("");
-  const address = selected?.row.fullAddress || "";
-  const explorer = address ? explorerUrl(chain, address) : "";
-  const confidence = confidenceLabel(selected?.profile);
-  const isProfileLoading =
-    selected && !selected.profile && loadState === "loading";
-
   useEffect(() => {
     if (!selected) return;
 
@@ -12473,18 +13740,16 @@ function WalletDetailDrawer({
 
   if (!selected) return null;
 
-  async function copyAddress() {
-    if (!address) return;
-    await navigator.clipboard.writeText(address);
-    setCopiedAddress(address);
-  }
+  const isPersonalityUnavailable =
+    walletPersonalityLoadState === "error" ||
+    (walletPersonalityLoadState === "loaded" && !walletPersonality);
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <button
         type="button"
         aria-label="Close wallet detail drawer"
-        className="absolute inset-0 bg-black/55 backdrop-blur-sm"
+        className="absolute inset-0 bg-[rgba(10,10,10,0.55)] backdrop-blur-sm"
         onClick={onClose}
       />
 
@@ -12492,136 +13757,29 @@ function WalletDetailDrawer({
         initial={{ x: 36, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
         exit={{ x: 36, opacity: 0 }}
-        className="relative z-10 h-full w-full max-w-xl overflow-y-auto border-l border-white/10 bg-[#05080c]/95 p-5 shadow-[0_0_90px_rgba(0,0,0,0.55)] backdrop-blur-2xl"
+        className="relative z-10 h-full w-full max-w-xl overflow-y-auto border-l border-[color:var(--nova-border)] nova-card-inner p-5 shadow-[0_0_90px_rgba(0,0,0,0.55)] backdrop-blur-2xl"
       >
-        <div className="mb-5 flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.35em] text-cyan-100/40">
-              Wallet Detail
-            </p>
-            <h3 className="mt-2 text-2xl font-semibold tracking-[-0.05em]">
-              {selected.row.wallet}
-            </h3>
-          </div>
+        <div className="mb-4 flex justify-end">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border border-white/10 bg-white/[0.035] px-3 py-1.5 text-xs text-white/55 transition hover:bg-white/[0.06]"
+            className="rounded-full nova-card-inner px-3 py-1.5 text-xs text-[color:var(--nova-text-soft)] transition hover:nova-card-inner"
           >
             Close
           </button>
         </div>
 
-        <div className="rounded-[1.5rem] border border-white/10 bg-black/25 p-4">
-          <p className="text-xs text-white/32">Full address</p>
-          <p className="mt-2 break-all font-mono text-sm leading-relaxed text-white/75">
-            {address || "Address unavailable"}
-          </p>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={copyAddress}
-              disabled={!address}
-              className="rounded-full border border-cyan-100/10 bg-cyan-100/[0.045] px-3 py-1.5 text-xs text-cyan-100/65 transition hover:bg-cyan-100/[0.08] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {copiedAddress === address ? "Copied" : "Copy address"}
-            </button>
-            {explorer && (
-              <a
-                href={explorer}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-full border border-white/10 bg-white/[0.035] px-3 py-1.5 text-xs text-white/55 transition hover:bg-white/[0.06]"
-              >
-                Open explorer
-              </a>
-            )}
+        {isPersonalityUnavailable ? (
+          <div className="rounded-[1.5rem] nova-card-inner p-4 text-sm text-[color:var(--nova-text-soft)]">
+            Wallet personality is unavailable for this wallet.
           </div>
-        </div>
-
-        {isProfileLoading ? (
-          <WalletDrawerSkeleton />
         ) : (
-          <>
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <DrawerMetric
-                label="Wallet age days"
-                value={formatDrawerValue(selected.profile?.walletAgeDays)}
-              />
-              <DrawerMetric
-                label="Days since active"
-                value={formatDrawerValue(selected.profile?.daysSinceLastActive)}
-              />
-              <DrawerMetric
-                label="Native balance"
-                value={selected.profile?.nativeBalance?.formatted || "N/A"}
-              />
-              <DrawerMetric
-                label="Transaction count"
-                value={formatDrawerValue(selected.profile?.transactionCount)}
-              />
-              <DrawerMetric
-                label="Activity velocity"
-                value={formatDrawerValue(selected.profile?.activityVelocityScore)}
-              />
-              <DrawerMetric
-                label="Dormancy risk"
-                value={formatDrawerValue(selected.profile?.dormancyRiskScore)}
-              />
-              <DrawerMetric
-                label="Concentration risk"
-                value={formatDrawerValue(
-                  selected.profile?.concentrationRiskScore
-                )}
-              />
-              <DrawerMetric
-                label="Reliability score"
-                value={formatDrawerValue(
-                  selected.profile?.behaviorReliabilityScore
-                )}
-              />
-            </div>
-
-            <div className="mt-4 rounded-[1.5rem] border border-white/10 bg-black/25 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs text-white/32">Behavior class</p>
-                  <p className="mt-1 text-sm text-white/72">
-                    {selected.profile?.behaviorClass || "Pending V2"}
-                  </p>
-                </div>
-                <span
-                  className={`rounded-full border px-3 py-1 text-xs ${confidenceBadgeClass(confidence)}`}
-                >
-                  {confidence}
-                </span>
-              </div>
-              <p className="mt-4 text-xs leading-relaxed text-white/38">
-                {selected.profile?.behaviorExplanation ||
-                  "This wallet has not been included in the current V2 profile batch. Holder facts remain live; behavior scoring is pending for this row."}
-              </p>
-            </div>
-          </>
+          <WalletPersonalitySection
+            data={walletPersonality}
+            error={walletPersonalityError}
+            loadState={walletPersonalityLoadState}
+          />
         )}
-
-        <WalletPersonalitySection
-          data={walletPersonality}
-          error={walletPersonalityError}
-          loadState={walletPersonalityLoadState}
-        />
-
-        <WalletMemorySection
-          data={walletMemory}
-          error={walletMemoryError}
-          loadState={walletMemoryLoadState}
-        />
-
-        <TransactionIntelligenceSection
-          data={transactionData}
-          error={transactionError}
-          loadState={transactionLoadState}
-        />
       </motion.aside>
     </div>
   );
@@ -12639,13 +13797,13 @@ function TransactionIntelligenceSection({
   const transactions = data?.transactions.slice(0, 5) || [];
 
   return (
-    <div className="mt-4 rounded-[1.5rem] border border-white/10 bg-black/25 p-4">
+    <div className="mt-4 rounded-[1.5rem] nova-card-inner p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/38">
+          <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--nova-accent-soft)]">
             Transaction Intelligence
           </p>
-          <p className="mt-2 text-sm text-white/72">
+          <p className="mt-2 text-sm text-[color:var(--nova-text-soft)]">
             {data?.behaviorSummary.dominantBehavior || "Inferred behavior pending"}
           </p>
         </div>
@@ -12661,8 +13819,8 @@ function TransactionIntelligenceSection({
       {loadState === "loading" && <TransactionIntelligenceSkeleton />}
 
       {loadState === "error" && (
-        <div className="mt-4 rounded-2xl border border-red-100/10 bg-red-100/[0.035] p-3">
-          <p className="text-xs leading-relaxed text-red-100/62">
+        <div className="mt-4 rounded-2xl nova-card-inner p-3">
+          <p className="text-xs leading-relaxed text-[color:var(--nova-danger)]">
             {error || "Transaction intelligence could not be loaded."}
           </p>
         </div>
@@ -12670,7 +13828,7 @@ function TransactionIntelligenceSection({
 
       {loadState === "loaded" && data && (
         <>
-          <p className="mt-3 text-xs leading-relaxed text-white/36">
+          <p className="mt-3 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
             {data.behaviorSummary.explanation}
           </p>
 
@@ -12703,12 +13861,12 @@ function TransactionIntelligenceSection({
 
           <div className="mt-4">
             <div className="mb-2 flex items-center justify-between">
-              <p className="text-xs text-white/35">Recent transfers</p>
-              <p className="text-xs text-white/24">Latest 5</p>
+              <p className="text-xs text-[color:var(--nova-text-muted)]">Recent transfers</p>
+              <p className="text-xs text-[color:var(--nova-text-muted)]">Latest 5</p>
             </div>
 
             {transactions.length === 0 ? (
-              <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-3 text-xs text-white/35">
+              <div className="rounded-2xl nova-card-inner p-3 text-xs text-[color:var(--nova-text-muted)]">
                 No recent ERC-20 transfers found.
               </div>
             ) : (
@@ -12726,12 +13884,12 @@ function TransactionIntelligenceSection({
       )}
 
       {loadState === "idle" && (
-        <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.025] p-3 text-xs text-white/35">
+        <div className="mt-4 rounded-2xl nova-card-inner p-3 text-xs text-[color:var(--nova-text-muted)]">
           Select a wallet to load transfer intelligence.
         </div>
       )}
 
-      <p className="mt-4 rounded-2xl border border-cyan-100/10 bg-cyan-100/[0.025] p-3 text-xs leading-relaxed text-white/35">
+      <p className="mt-4 rounded-2xl nova-card-inner p-3 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
         Transfer-based inference only. PnL, win rate and average hold duration
         are not calculated yet.
       </p>
@@ -12748,25 +13906,17 @@ function WalletPersonalitySection({
   error: string;
   loadState: HolderLoadState;
 }) {
-  const [copiedShareCard, setCopiedShareCard] = useState("");
-
-  async function copyShareCard() {
-    if (!data?.shareCardText) return;
-    await navigator.clipboard.writeText(data.shareCardText);
-    setCopiedShareCard(data.shareCardText);
-  }
-
   return (
-    <div className="mt-4 overflow-hidden rounded-[1.5rem] border border-cyan-100/10 bg-cyan-100/[0.025] p-4 shadow-[0_0_60px_rgba(34,211,238,0.045)]">
+    <div className="mt-4 overflow-hidden rounded-[1.5rem] nova-card-inner p-4 shadow-[0_0_60px_rgba(83,104,120,0.045)]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/42">
+          <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--nova-accent-soft)]">
             Wallet Personality
           </p>
-          <p className="mt-2 text-xl font-semibold tracking-[-0.05em] text-white/82">
+          <p className="mt-2 text-xl font-semibold tracking-[-0.05em] text-[color:var(--nova-text)]">
             {data?.personalityType || "Personality pending"}
           </p>
-          <p className="mt-1 text-xs leading-relaxed text-white/38">
+          <p className="mt-1 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
             {data?.personalitySubtitle ||
               "NovaOS will classify this wallet from metadata and transfer patterns."}
           </p>
@@ -12783,28 +13933,28 @@ function WalletPersonalitySection({
       {loadState === "loading" && <WalletPersonalitySkeleton />}
 
       {loadState === "error" && (
-        <div className="mt-4 rounded-2xl border border-red-100/10 bg-red-100/[0.035] p-3">
-          <p className="text-xs leading-relaxed text-red-100/62">
+        <div className="mt-4 rounded-2xl nova-card-inner p-3">
+          <p className="text-xs leading-relaxed text-[color:var(--nova-danger)]">
             {error || "Wallet personality could not be loaded."}
           </p>
         </div>
       )}
 
       {loadState === "idle" && (
-        <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.025] p-3 text-xs text-white/35">
+        <div className="mt-4 rounded-2xl nova-card-inner p-3 text-xs text-[color:var(--nova-text-muted)]">
           Select a wallet to load personality inference.
         </div>
       )}
 
       {loadState === "loaded" && !data && (
-        <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.025] p-3 text-xs text-white/35">
+        <div className="mt-4 rounded-2xl nova-card-inner p-3 text-xs text-[color:var(--nova-text-muted)]">
           Wallet personality is unavailable for this wallet.
         </div>
       )}
 
       {loadState === "loaded" && data && (
         <>
-          <div className="mt-4 space-y-2 rounded-2xl border border-white/10 bg-black/20 p-3">
+          <div className="mt-4 space-y-2 rounded-2xl nova-card-inner p-3">
             <PersonalityScoreBar
               label="Conviction"
               value={data.personalityScores.conviction}
@@ -12841,19 +13991,15 @@ function WalletPersonalitySection({
             />
           </div>
 
-          <ShareCardPreview
-            copied={copiedShareCard === data.shareCardText}
-            data={data}
-            onCopy={copyShareCard}
-          />
+          <ShareCardPreview data={data} />
 
-          <p className="mt-4 rounded-2xl border border-white/10 bg-white/[0.025] p-3 text-xs leading-relaxed text-white/35">
+          <p className="mt-4 rounded-2xl nova-card-inner p-3 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
             {data.methodologyNote}
           </p>
         </>
       )}
 
-      <p className="mt-4 rounded-2xl border border-cyan-100/10 bg-cyan-100/[0.025] p-3 text-xs leading-relaxed text-white/35">
+      <p className="mt-4 rounded-2xl nova-card-inner p-3 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
         Behavior-inference only. No PnL, win rate, smart money identity or
         insider identity is calculated.
       </p>
@@ -12862,13 +14008,9 @@ function WalletPersonalitySection({
 }
 
 function ShareCardPreview({
-  copied,
   data,
-  onCopy,
 }: {
-  copied: boolean;
   data: WalletPersonalityData;
-  onCopy: () => void;
 }) {
   const topScores = Object.entries(data.personalityScores)
     .sort(([, a], [, b]) => b - a)
@@ -12876,30 +14018,23 @@ function ShareCardPreview({
 
   return (
     <div className="mt-4">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <p className="text-xs text-white/35">Share Card Preview</p>
-        <button
-          type="button"
-          onClick={onCopy}
-          className="shrink-0 rounded-full border border-cyan-100/10 bg-cyan-100/[0.045] px-3 py-1 text-xs text-cyan-100/62 transition hover:bg-cyan-100/[0.08]"
-        >
-          {copied ? "Copied" : "Copy Card Text"}
-        </button>
+      <div className="mb-2">
+        <p className="text-xs text-[color:var(--nova-text-muted)]">Share Card Preview</p>
       </div>
 
-      <div className="relative overflow-hidden rounded-[1.6rem] border border-cyan-100/12 bg-[#03070a] p-4 shadow-[0_0_70px_rgba(34,211,238,0.07)]">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,rgba(180,240,255,0.12),transparent_48%),radial-gradient(circle_at_90%_85%,rgba(126,87,194,0.12),transparent_42%)]" />
+      <div className="relative overflow-hidden rounded-[1.6rem] border border-[color:var(--nova-border)] nova-card-inner p-4 shadow-[0_0_70px_rgba(83,104,120,0.07)]">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_0%,rgba(83,104,120,0.12),transparent_48%),radial-gradient(circle_at_90%_85%,rgba(94,114,107,0.12),transparent_42%)]" />
 
         <div className="relative">
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-cyan-100 shadow-[0_0_16px_rgba(180,240,255,0.75)]" />
-                <p className="text-xs font-semibold tracking-[0.28em] text-cyan-100/70">
+                <span className="h-2 w-2 rounded-full bg-[var(--nova-accent)] shadow-[0_0_16px_rgba(127,144,150,0.58)]" />
+                <p className="text-xs font-semibold tracking-[0.28em] text-[color:var(--nova-accent)]">
                   NovaOS
                 </p>
               </div>
-              <p className="mt-2 font-mono text-xs text-white/32">
+              <p className="mt-2 font-mono text-xs text-[color:var(--nova-text-muted)]">
                 {data.shortAddress}
               </p>
             </div>
@@ -12913,10 +14048,10 @@ function ShareCardPreview({
           </div>
 
           <div className="mt-5">
-            <p className="text-2xl font-semibold tracking-[-0.06em] text-white/86">
+            <p className="text-2xl font-semibold tracking-[-0.06em] text-[color:var(--nova-text)]">
               {data.personalityType}
             </p>
-            <p className="mt-2 text-xs leading-relaxed text-white/42">
+            <p className="mt-2 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
               {data.shareCardText}
             </p>
           </div>
@@ -12925,12 +14060,12 @@ function ShareCardPreview({
             {topScores.map(([label, value]) => (
               <div
                 key={label}
-                className="rounded-2xl border border-white/10 bg-white/[0.035] p-2.5"
+                className="rounded-2xl nova-card-inner p-2.5"
               >
-                <p className="truncate text-[10px] uppercase tracking-[0.16em] text-white/28">
+                <p className="truncate text-[10px] uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
                   {formatScoreLabel(label)}
                 </p>
-                <p className="mt-1 text-lg font-semibold text-cyan-100/72">
+                <p className="mt-1 text-lg font-semibold text-[color:var(--nova-accent)]">
                   {value}
                 </p>
               </div>
@@ -12941,14 +14076,14 @@ function ShareCardPreview({
             {data.traits.slice(0, 3).map((trait) => (
               <span
                 key={trait}
-                className="rounded-full border border-cyan-100/10 bg-cyan-100/[0.035] px-2.5 py-1 text-[11px] text-cyan-100/58"
+                className="rounded-full nova-card-inner px-2.5 py-1 text-[11px] text-[color:var(--nova-accent-soft)]"
               >
                 {trait}
               </span>
             ))}
           </div>
 
-          <p className="mt-5 border-t border-white/10 pt-3 text-[11px] text-white/32">
+          <p className="mt-5 border-t border-[color:var(--nova-border)] pt-3 text-[11px] text-[color:var(--nova-text-muted)]">
             Behavior inference · Not financial advice
           </p>
         </div>
@@ -12973,12 +14108,12 @@ function PersonalityScoreBar({
   return (
     <div>
       <div className="mb-1 flex items-center justify-between gap-3 text-xs">
-        <span className="text-white/38">{label}</span>
-        <span className="font-medium tabular-nums text-cyan-100/62">{value}</span>
+        <span className="text-[color:var(--nova-text-muted)]">{label}</span>
+        <span className="font-medium tabular-nums text-[color:var(--nova-accent-soft)]">{value}</span>
       </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
+      <div className="h-1.5 overflow-hidden rounded-full nova-card-inner">
         <div
-          className="h-full rounded-full bg-gradient-to-r from-[#022026] via-cyan-100/60 to-[#392250]"
+          className="h-full rounded-full bg-gradient-to-r from-[#536878] via-[rgba(83,104,120,0.58)] to-[rgba(10,10,10,0.72)]"
           style={{ width: `${Math.max(4, Math.min(100, value))}%` }}
         />
       </div>
@@ -12997,15 +14132,15 @@ function PersonalityBadgeGroup({
 }) {
   return (
     <div>
-      <p className="mb-2 text-xs text-white/35">{title}</p>
+      <p className="mb-2 text-xs text-[color:var(--nova-text-muted)]">{title}</p>
       <div className="flex flex-wrap gap-2">
         {items.map((item) => (
           <span
             key={item}
             className={`rounded-full border px-2.5 py-1 text-[11px] ${
               tone === "amber"
-                ? "border-amber-100/12 bg-amber-100/[0.04] text-amber-100/58"
-                : "border-cyan-100/10 bg-cyan-100/[0.035] text-cyan-100/58"
+                ? "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-warning)]"
+                : "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-accent-soft)]"
             }`}
           >
             {item}
@@ -13019,7 +14154,7 @@ function PersonalityBadgeGroup({
 function WalletPersonalitySkeleton() {
   return (
     <div className="mt-4 space-y-3">
-      <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+      <div className="rounded-2xl nova-card-inner p-3">
         {Array.from({ length: 6 }).map((_, index) => (
           <div key={index} className="mb-3 last:mb-0">
             <SkeletonLine className="h-2 w-28" />
@@ -13032,7 +14167,7 @@ function WalletPersonalitySkeleton() {
           <SkeletonLine key={index} className="h-6 w-24 rounded-full" />
         ))}
       </div>
-      <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
+      <div className="rounded-2xl nova-card-inner p-3">
         <SkeletonLine className="h-2 w-20" />
         <SkeletonLine className="mt-3 h-2 w-full" />
         <SkeletonLine className="mt-2 h-2 w-4/5" />
@@ -13051,13 +14186,13 @@ function WalletMemorySection({
   loadState: HolderLoadState;
 }) {
   return (
-    <div className="mt-4 rounded-[1.5rem] border border-white/10 bg-black/25 p-4">
+    <div className="mt-4 rounded-[1.5rem] nova-card-inner p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/38">
+          <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--nova-accent-soft)]">
             Wallet Memory
           </p>
-          <p className="mt-2 text-sm text-white/72">
+          <p className="mt-2 text-sm text-[color:var(--nova-text-soft)]">
             {data?.walletFingerprint || "Runtime pattern memory pending"}
           </p>
         </div>
@@ -13073,28 +14208,28 @@ function WalletMemorySection({
       {loadState === "loading" && <WalletMemorySkeleton />}
 
       {loadState === "error" && (
-        <div className="mt-4 rounded-2xl border border-red-100/10 bg-red-100/[0.035] p-3">
-          <p className="text-xs leading-relaxed text-red-100/62">
+        <div className="mt-4 rounded-2xl nova-card-inner p-3">
+          <p className="text-xs leading-relaxed text-[color:var(--nova-danger)]">
             {error || "Wallet memory could not be loaded."}
           </p>
         </div>
       )}
 
       {loadState === "idle" && (
-        <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.025] p-3 text-xs text-white/35">
+        <div className="mt-4 rounded-2xl nova-card-inner p-3 text-xs text-[color:var(--nova-text-muted)]">
           Select a wallet to load runtime memory.
         </div>
       )}
 
       {loadState === "loaded" && !data && (
-        <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.025] p-3 text-xs text-white/35">
+        <div className="mt-4 rounded-2xl nova-card-inner p-3 text-xs text-[color:var(--nova-text-muted)]">
           Wallet memory is unavailable for this wallet.
         </div>
       )}
 
       {loadState === "loaded" && data && (
         <>
-          <p className="mt-3 text-xs leading-relaxed text-white/38">
+          <p className="mt-3 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
             {data.memorySummary}
           </p>
 
@@ -13125,25 +14260,25 @@ function WalletMemorySection({
             />
           </div>
 
-          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.025] p-3">
+          <div className="mt-4 rounded-2xl nova-card-inner p-3">
             <div className="flex items-center justify-between gap-3">
-              <p className="text-xs text-white/35">Recurring cluster appearance</p>
-              <span className="text-xs font-medium text-cyan-100/62">
+              <p className="text-xs text-[color:var(--nova-text-muted)]">Recurring cluster appearance</p>
+              <span className="text-xs font-medium text-[color:var(--nova-accent-soft)]">
                 {data.recurringClusterAppearance.detected ? "Detected" : "Not detected"}
               </span>
             </div>
-            <p className="mt-2 text-xs leading-relaxed text-white/34">
+            <p className="mt-2 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
               {data.recurringClusterAppearance.explanation}
             </p>
           </div>
 
           <div className="mt-4">
-            <p className="mb-2 text-xs text-white/35">Repeated behavior flags</p>
+            <p className="mb-2 text-xs text-[color:var(--nova-text-muted)]">Repeated behavior flags</p>
             <div className="flex flex-wrap gap-2">
               {data.repeatedBehaviorFlags.map((flag) => (
                 <span
                   key={flag}
-                  className="rounded-full border border-cyan-100/10 bg-cyan-100/[0.035] px-2.5 py-1 text-[11px] text-cyan-100/58"
+                  className="rounded-full nova-card-inner px-2.5 py-1 text-[11px] text-[color:var(--nova-accent-soft)]"
                 >
                   {formatMemoryFlag(flag)}
                 </span>
@@ -13153,7 +14288,7 @@ function WalletMemorySection({
         </>
       )}
 
-      <p className="mt-4 rounded-2xl border border-cyan-100/10 bg-cyan-100/[0.025] p-3 text-xs leading-relaxed text-white/35">
+      <p className="mt-4 rounded-2xl nova-card-inner p-3 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
         Runtime memory and transfer-pattern inference. Not a profitability or
         identity claim.
       </p>
@@ -13170,14 +14305,14 @@ function WalletMemorySkeleton() {
         {Array.from({ length: 6 }).map((_, index) => (
           <div
             key={index}
-            className="rounded-2xl border border-white/10 bg-black/22 p-3"
+            className="rounded-2xl nova-card-inner p-3"
           >
             <SkeletonLine className="h-2 w-20" />
             <SkeletonLine className="mt-3 h-5 w-12" />
           </div>
         ))}
       </div>
-      <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-3">
+      <div className="rounded-2xl nova-card-inner p-3">
         <SkeletonLine className="h-3 w-40" />
         <SkeletonLine className="mt-3 h-2 w-full" />
       </div>
@@ -13194,14 +14329,14 @@ function formatMemoryFlag(flag: string) {
 
 function memoryConfidenceClass(confidence: "High" | "Medium" | "Low") {
   if (confidence === "High") {
-    return "border-emerald-100/15 bg-emerald-100/[0.05] text-emerald-100/68";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-success)]";
   }
 
   if (confidence === "Medium") {
-    return "border-cyan-100/12 bg-cyan-100/[0.045] text-cyan-100/66";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-accent-soft)]";
   }
 
-  return "border-amber-100/14 bg-amber-100/[0.045] text-amber-100/62";
+  return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-warning)]";
 }
 
 function TransactionRow({
@@ -13210,7 +14345,7 @@ function TransactionRow({
   transaction: WalletTransaction;
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-3">
+    <div className="rounded-2xl nova-card-inner p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span
@@ -13220,37 +14355,37 @@ function TransactionRow({
           >
             {formatDirection(transaction.direction)}
           </span>
-          <p className="truncate text-xs text-white/68">
+          <p className="truncate text-xs text-[color:var(--nova-text-soft)]">
             {transaction.tokenSymbol || "Token"}
           </p>
         </div>
-        <p className="shrink-0 text-xs text-white/30">
+        <p className="shrink-0 text-xs text-[color:var(--nova-text-muted)]">
           {formatTransferTime(transaction.timestamp)}
         </p>
       </div>
 
       <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
         <div className="min-w-0">
-          <p className="text-white/25">Amount</p>
-          <p className="mt-0.5 truncate text-white/55">
+          <p className="text-[color:var(--nova-text-muted)]">Amount</p>
+          <p className="mt-0.5 truncate text-[color:var(--nova-text-soft)]">
             {transaction.amount || "N/A"}
           </p>
         </div>
         <div className="min-w-0">
-          <p className="text-white/25">Value</p>
-          <p className="mt-0.5 truncate text-white/55">
+          <p className="text-[color:var(--nova-text-muted)]">Value</p>
+          <p className="mt-0.5 truncate text-[color:var(--nova-text-soft)]">
             {formatUsd(transaction.valueUsd)}
           </p>
         </div>
         <div className="min-w-0">
-          <p className="text-white/25">Tx</p>
-          <p className="mt-0.5 truncate font-mono text-white/45">
+          <p className="text-[color:var(--nova-text-muted)]">Tx</p>
+          <p className="mt-0.5 truncate font-mono text-[color:var(--nova-text-soft)]">
             {shortHash(transaction.txHash)}
           </p>
         </div>
         <div className="min-w-0">
-          <p className="text-white/25">Counterparty</p>
-          <p className="mt-0.5 truncate font-mono text-white/45">
+          <p className="text-[color:var(--nova-text-muted)]">Counterparty</p>
+          <p className="mt-0.5 truncate font-mono text-[color:var(--nova-text-soft)]">
             {shortHash(transaction.counterparty)}
           </p>
         </div>
@@ -13266,7 +14401,7 @@ function TransactionIntelligenceSkeleton() {
         {Array.from({ length: 6 }).map((_, index) => (
           <div
             key={index}
-            className="rounded-2xl border border-white/10 bg-black/22 p-3"
+            className="rounded-2xl nova-card-inner p-3"
           >
             <SkeletonLine className="h-2 w-20" />
             <SkeletonLine className="mt-3 h-5 w-12" />
@@ -13276,7 +14411,7 @@ function TransactionIntelligenceSkeleton() {
       {Array.from({ length: 3 }).map((_, index) => (
         <div
           key={index}
-          className="rounded-2xl border border-white/10 bg-white/[0.025] p-3"
+          className="rounded-2xl nova-card-inner p-3"
         >
           <SkeletonLine className="h-3 w-32" />
           <SkeletonLine className="mt-3 h-2 w-full" />
@@ -13295,14 +14430,14 @@ function formatDirection(direction: WalletTransferDirection) {
 
 function directionBadgeClass(direction: WalletTransferDirection) {
   if (direction === "buy" || direction === "transfer_in") {
-    return "border-emerald-100/14 bg-emerald-100/[0.045] text-emerald-100/66";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-success)]";
   }
 
   if (direction === "sell") {
-    return "border-red-100/14 bg-red-100/[0.045] text-red-100/62";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-danger)]";
   }
 
-  return "border-amber-100/14 bg-amber-100/[0.045] text-amber-100/62";
+  return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-warning)]";
 }
 
 function formatUsd(value: number | null | undefined) {
@@ -13337,9 +14472,9 @@ function formatTransferTime(timestamp: string | null) {
 
 function DrawerMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/22 p-3">
-      <p className="text-xs text-white/32">{label}</p>
-      <p className="mt-1 truncate text-base font-semibold text-white/76">
+    <div className="rounded-2xl nova-card-inner p-3">
+      <p className="text-xs text-[color:var(--nova-text-muted)]">{label}</p>
+      <p className="mt-1 truncate text-base font-semibold text-[color:var(--nova-text)]">
         {value}
       </p>
     </div>
@@ -13352,7 +14487,7 @@ function WalletDrawerSkeleton() {
       {Array.from({ length: 8 }).map((_, index) => (
         <div
           key={index}
-          className="rounded-2xl border border-white/10 bg-black/22 p-3"
+          className="rounded-2xl nova-card-inner p-3"
         >
           <SkeletonLine className="h-2 w-20" />
           <SkeletonLine className="mt-3 h-5 w-16" />
@@ -13388,6 +14523,14 @@ function explorerUrl(chain: string, address: string) {
   return "";
 }
 
+const LEGACY_WALLET_DRAWER_SECTIONS = [
+  TransactionIntelligenceSection,
+  WalletMemorySection,
+  WalletDrawerSkeleton,
+  explorerUrl,
+];
+void LEGACY_WALLET_DRAWER_SECTIONS;
+
 function confidenceLabel(profile?: WalletBehaviorProfile) {
   if (!profile || profile.dataQuality === "unavailable") return "Low confidence";
   const reliability = profile.behaviorReliabilityScore ?? profile.dataConfidence;
@@ -13410,14 +14553,14 @@ function confidenceLabel(profile?: WalletBehaviorProfile) {
 
 function confidenceBadgeClass(confidence: string) {
   if (confidence === "High confidence") {
-    return "border-emerald-100/15 bg-emerald-100/[0.05] text-emerald-100/68";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-success)]";
   }
 
   if (confidence === "Medium confidence") {
-    return "border-cyan-100/12 bg-cyan-100/[0.045] text-cyan-100/66";
+    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-accent-soft)]";
   }
 
-  return "border-amber-100/14 bg-amber-100/[0.045] text-amber-100/62";
+  return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-warning)]";
 }
 
 function SkeletonLine({ className = "" }: { className?: string }) {
@@ -13425,7 +14568,7 @@ function SkeletonLine({ className = "" }: { className?: string }) {
     <motion.span
       animate={{ opacity: [0.24, 0.58, 0.24] }}
       transition={{ duration: 1.35, repeat: Infinity, ease: "easeInOut" }}
-      className={`block rounded-full bg-white/10 ${className}`}
+      className={`block rounded-full bg-[rgba(178,190,181,0.12)] ${className}`}
     />
   );
 }

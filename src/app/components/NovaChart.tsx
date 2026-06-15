@@ -2,10 +2,9 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
-  CandlestickSeries,
+  AreaSeries,
   ColorType,
   createChart,
-  HistogramSeries,
   IChartApi,
   ISeriesApi,
   LineStyle,
@@ -18,12 +17,6 @@ type Candle = {
   high: number;
   low: number;
   close: number;
-};
-
-type VolumeBar = {
-  time: UTCTimestamp;
-  value: number;
-  color: string;
 };
 
 type NovaChartProps = {
@@ -62,13 +55,12 @@ function NovaChartComponent({
 }: NovaChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const areaSeriesRef = useRef<ISeriesApi<"Area"> | null>(null);
+  const candlesRef = useRef<Candle[]>([]);
   const hasFittedRef = useRef(false);
 
   const [timeframe, setTimeframe] = useState("1h");
   const [candles, setCandles] = useState<Candle[]>([]);
-  const [volume, setVolume] = useState<VolumeBar[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -81,7 +73,6 @@ function NovaChartComponent({
     hasFittedRef.current = false;
     const resetFrame = requestAnimationFrame(() => {
       setCandles([]);
-      setVolume([]);
       setError("");
     });
 
@@ -114,7 +105,6 @@ function NovaChartComponent({
         }
 
         setCandles(data.candles || []);
-        setVolume(data.volume || []);
       } catch (err) {
         if (!active) return;
         if (err instanceof Error && err.name === "AbortError") return;
@@ -139,48 +129,48 @@ function NovaChartComponent({
 
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth || 900,
-      height: chartHeight,
+      height: Math.round(containerRef.current.getBoundingClientRect().height) || chartHeight,
       autoSize: false,
       layout: {
         background: {
           type: ColorType.Solid,
-          color: "#05070a",
+          color: "rgba(5,8,11,0)",
         },
-        textColor: "rgba(255,255,255,0.42)",
+        textColor: "rgba(178,190,181,0.55)",
         attributionLogo: false,
       },
       grid: {
         vertLines: {
-          color: "rgba(255,255,255,0.03)",
+          color: "rgba(178,190,181,0.08)",
         },
         horzLines: {
-          color: "rgba(255,255,255,0.03)",
+          color: "rgba(178,190,181,0.08)",
         },
       },
       crosshair: {
         mode: 0,
         vertLine: {
-          color: "rgba(180,240,255,0.18)",
+          color: "rgba(178,190,181,0.16)",
           width: 1,
           style: LineStyle.Dashed,
-          labelBackgroundColor: "#071318",
+          labelBackgroundColor: "#101213",
         },
         horzLine: {
-          color: "rgba(180,240,255,0.18)",
+          color: "rgba(178,190,181,0.16)",
           width: 1,
           style: LineStyle.Dashed,
-          labelBackgroundColor: "#071318",
+          labelBackgroundColor: "#101213",
         },
       },
       rightPriceScale: {
-        borderColor: "rgba(255,255,255,0.08)",
+        borderColor: "rgba(178,190,181,0.10)",
         scaleMargins: {
-          top: 0.04,
-          bottom: 0.08,
+          top: 0.08,
+          bottom: 0.1,
         },
       },
       timeScale: {
-        borderColor: "rgba(255,255,255,0.08)",
+        borderColor: "rgba(178,190,181,0.10)",
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 8,
@@ -203,72 +193,121 @@ function NovaChartComponent({
       },
     });
 
-    const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: "rgba(125,255,222,0.96)",
-      downColor: "rgba(255,95,118,0.96)",
-      borderUpColor: "rgba(125,255,222,1)",
-      borderDownColor: "rgba(255,95,118,1)",
-      wickUpColor: "rgba(125,255,222,0.95)",
-      wickDownColor: "rgba(255,95,118,0.95)",
-      priceLineColor: "rgba(180,240,255,0.35)",
+    const areaSeries = chart.addSeries(AreaSeries, {
+      lineColor: "#E5E4E2",
+      lineWidth: 2,
+      topColor: "rgba(178,190,181,0.16)",
+      bottomColor: "rgba(10,10,10,0.02)",
+      priceLineColor: "rgba(178,190,181,0.30)",
       priceLineWidth: 1,
-    });
-
-    const volumeSeries = chart.addSeries(HistogramSeries, {
-      priceFormat: {
-        type: "volume",
-      },
-      priceScaleId: "",
-      lastValueVisible: false,
-      priceLineVisible: false,
-    });
-
-    chart.priceScale("").applyOptions({
-      scaleMargins: {
-        top: 0.9,
-        bottom: 0,
-      },
+      lastValueVisible: true,
     });
 
     chartRef.current = chart;
-    candleSeriesRef.current = candleSeries;
-    volumeSeriesRef.current = volumeSeries;
+    areaSeriesRef.current = areaSeries;
 
-    function handleResize() {
+    function resizeChartToContainer() {
       if (!containerRef.current || !chartRef.current) return;
 
+      const bounds = containerRef.current.getBoundingClientRect();
       chartRef.current.applyOptions({
-        width: containerRef.current.clientWidth || 900,
-        height: chartHeight,
+        width: Math.round(bounds.width) || 900,
+        height: Math.round(bounds.height) || chartHeight,
       });
     }
 
-    window.addEventListener("resize", handleResize);
+    const resizeObserver = new ResizeObserver(resizeChartToContainer);
+    resizeObserver.observe(containerRef.current);
+    const resizeFrame = requestAnimationFrame(resizeChartToContainer);
+    window.addEventListener("resize", resizeChartToContainer);
 
     return () => {
-      window.removeEventListener("resize", handleResize);
+      cancelAnimationFrame(resizeFrame);
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", resizeChartToContainer);
 
       chart.remove();
 
       chartRef.current = null;
-      candleSeriesRef.current = null;
-      volumeSeriesRef.current = null;
+      areaSeriesRef.current = null;
     };
   }, [chartHeight]);
 
   useEffect(() => {
-    if (!chartRef.current || !candleSeriesRef.current || !volumeSeriesRef.current) {
+    if (!chartRef.current || !areaSeriesRef.current) return;
+
+    function applyVisiblePriceRange() {
+      if (!chartRef.current) return;
+
+      const chart = chartRef.current;
+      const visibleRange = chart.timeScale().getVisibleLogicalRange();
+      const sourceCandles = candlesRef.current;
+
+      if (!sourceCandles.length || !visibleRange) {
+        chart.priceScale("right").setAutoScale(true);
+        return;
+      }
+
+      const from = Math.max(0, Math.floor(visibleRange.from));
+      const to = Math.min(sourceCandles.length - 1, Math.ceil(visibleRange.to));
+      const visibleCandles = sourceCandles.slice(from, to + 1);
+
+      if (!visibleCandles.length) {
+        chart.priceScale("right").setAutoScale(true);
+        return;
+      }
+
+      let minPrice = Number.POSITIVE_INFINITY;
+      let maxPrice = Number.NEGATIVE_INFINITY;
+
+      for (const candle of visibleCandles) {
+        minPrice = Math.min(minPrice, candle.close);
+        maxPrice = Math.max(maxPrice, candle.close);
+      }
+
+      if (!Number.isFinite(minPrice) || !Number.isFinite(maxPrice)) {
+        chart.priceScale("right").setAutoScale(true);
+        return;
+      }
+
+      const range = maxPrice - minPrice;
+      const padding = range > 0 ? range * 0.1 : Math.max(Math.abs(maxPrice) * 0.01, 1);
+
+      chart.priceScale("right").setVisibleRange({
+        from: minPrice - padding,
+        to: maxPrice + padding,
+      });
+    }
+
+    const timeScale = chartRef.current.timeScale();
+    timeScale.subscribeVisibleLogicalRangeChange(applyVisiblePriceRange);
+    const frame = requestAnimationFrame(applyVisiblePriceRange);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      timeScale.unsubscribeVisibleLogicalRangeChange(applyVisiblePriceRange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!chartRef.current || !areaSeriesRef.current) {
       return;
     }
+
+    candlesRef.current = candles;
 
     if (!candles.length) {
-      candleSeriesRef.current.setData([]);
-      volumeSeriesRef.current.setData([]);
+      areaSeriesRef.current.setData([]);
+      chartRef.current.priceScale("right").setAutoScale(true);
       return;
     }
 
-    candleSeriesRef.current.setData(candles);
-    volumeSeriesRef.current.setData(volume);
+    areaSeriesRef.current.setData(
+      candles.map((candle) => ({
+        time: candle.time,
+        value: candle.close,
+      }))
+    );
 
     if (!hasFittedRef.current) {
       const visibleBars = timeframe === "1m" || timeframe === "5m" ? 180 : 260;
@@ -286,18 +325,47 @@ function NovaChartComponent({
 
       hasFittedRef.current = true;
     }
-  }, [candles, volume, timeframe]);
+
+    requestAnimationFrame(() => {
+      const visibleRange = chartRef.current?.timeScale().getVisibleLogicalRange();
+      if (!chartRef.current || !visibleRange) return;
+
+      const from = Math.max(0, Math.floor(visibleRange.from));
+      const to = Math.min(candles.length - 1, Math.ceil(visibleRange.to));
+      const visibleCandles = candles.slice(from, to + 1);
+
+      if (!visibleCandles.length) return;
+
+      let minPrice = Number.POSITIVE_INFINITY;
+      let maxPrice = Number.NEGATIVE_INFINITY;
+
+      for (const candle of visibleCandles) {
+        minPrice = Math.min(minPrice, candle.close);
+        maxPrice = Math.max(maxPrice, candle.close);
+      }
+
+      if (!Number.isFinite(minPrice) || !Number.isFinite(maxPrice)) return;
+
+      const range = maxPrice - minPrice;
+      const padding = range > 0 ? range * 0.1 : Math.max(Math.abs(maxPrice) * 0.01, 1);
+
+      chartRef.current.priceScale("right").setVisibleRange({
+        from: minPrice - padding,
+        to: maxPrice + padding,
+      });
+    });
+  }, [candles, timeframe]);
 
   return (
     <div
-      style={{ minHeight: chartHeight + 140 }}
-      className="relative flex h-full flex-col overflow-hidden rounded-[1.75rem] border border-white/10 bg-[#05070a]"
+      style={{ height: chartHeight + 96, minHeight: chartHeight + 96 }}
+      className="nova-card-strong nova-glass-hover relative flex flex-col overflow-hidden rounded-[1.75rem]"
     >
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(1,44,59,0.24),transparent_62%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(178,190,181,0.08),transparent_58%)]" />
 
-      <div className="relative z-20 flex shrink-0 items-center justify-between gap-6 border-b border-white/10 bg-black/30 px-5 py-4 backdrop-blur-xl">
+      <div className="relative z-20 flex shrink-0 items-center justify-between gap-6 px-5 py-4 backdrop-blur-xl">
         <div className="min-w-0">
-          <p className="text-xs uppercase tracking-[0.32em] text-cyan-100/38">
+          <p className="text-xs uppercase tracking-[0.32em] text-[color:var(--nova-text-muted)]">
             {token} / USD
           </p>
 
@@ -306,14 +374,14 @@ function NovaChartComponent({
               {price}
             </p>
 
-            <p className="pb-1 text-sm text-white/32">
+            <p className="pb-1 text-sm text-[color:var(--nova-text-muted)]">
               MC {marketCap} · Liq {liquidity}
             </p>
           </div>
         </div>
 
         <div className="shrink-0 text-right">
-          <p className="text-xs uppercase tracking-[0.32em] text-cyan-100/38">
+          <p className="text-xs uppercase tracking-[0.32em] text-[color:var(--nova-text-muted)]">
             24H Volume
           </p>
 
@@ -323,8 +391,8 @@ function NovaChartComponent({
         </div>
       </div>
 
-      <div className="relative z-20 flex shrink-0 items-center justify-between gap-4 border-b border-white/10 bg-black/15 px-5 py-3 backdrop-blur-xl">
-        <div className="flex items-center gap-2 overflow-x-auto text-xs text-white/40">
+      <div className="relative z-20 flex shrink-0 items-center justify-between gap-4 border-y border-[color:var(--nova-border)] bg-[rgba(10,10,10,0.50)] px-5 py-3 backdrop-blur-xl">
+        <div className="flex items-center gap-2 overflow-x-auto text-xs text-[color:var(--nova-text-soft)]">
           {timeframes.map((item) => (
             <button
               key={item}
@@ -335,10 +403,10 @@ function NovaChartComponent({
               disabled={loading}
               className={`rounded-full px-3 py-1 transition ${
                 item === timeframe
-                  ? "bg-cyan-100/10 text-cyan-100"
+                  ? "bg-[rgba(178,190,181,0.12)] text-[color:var(--nova-text)]"
                   : loading
                   ? "cursor-not-allowed opacity-40"
-                  : "hover:text-white/70"
+                  : "hover:text-[color:var(--nova-text-soft)]"
               }`}
             >
               {timeframeLabel(item)}
@@ -346,40 +414,40 @@ function NovaChartComponent({
           ))}
         </div>
 
-        <div className="hidden items-center gap-4 text-xs text-white/35 md:flex">
+        <div className="hidden items-center gap-4 text-xs text-[color:var(--nova-text-muted)] md:flex">
           <span>{candleCountText}</span>
           <span>USD</span>
-          <span>{loading ? "Syncing..." : "Live candles"}</span>
+          <span>{loading ? "Syncing..." : "Live closes"}</span>
         </div>
       </div>
 
-      <div className="relative z-10 flex-1">
+      <div className="nova-chart-body relative z-10 min-h-0 flex-1 overflow-hidden">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-0 h-2/3 bg-[radial-gradient(ellipse_at_50%_100%,rgba(178,190,181,0.10),rgba(10,10,10,0.08)_42%,transparent_72%)]" />
         <div
           ref={containerRef}
-          style={{ height: chartHeight }}
-          className="w-full"
+          className="absolute inset-0 z-10 h-full min-h-0 w-full"
         />
 
         {!pairAddress && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#05070a]/80 text-sm text-white/35 backdrop-blur-sm">
+          <div className="nova-card-inner absolute inset-0 z-30 flex items-center justify-center text-sm text-[color:var(--nova-text-muted)] backdrop-blur-sm">
             Search and select a token pair to load real candles.
           </div>
         )}
 
         {pairAddress && loading && !candles.length && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#05070a]/80 text-sm text-white/35 backdrop-blur-sm">
+          <div className="nova-card-inner absolute inset-0 z-30 flex items-center justify-center text-sm text-[color:var(--nova-text-muted)] backdrop-blur-sm">
             Loading real OHLCV data...
           </div>
         )}
 
         {pairAddress && error && !candles.length && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#05070a]/80 px-6 text-center text-sm text-red-100/55 backdrop-blur-sm">
+          <div className="nova-card-inner absolute inset-0 z-30 flex items-center justify-center px-6 text-center text-sm text-[color:var(--nova-danger)] backdrop-blur-sm">
             {error}
           </div>
         )}
 
         {pairAddress && !loading && !error && !candles.length && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#05070a]/80 px-6 text-center text-sm text-white/35 backdrop-blur-sm">
+          <div className="nova-card-inner absolute inset-0 z-30 flex items-center justify-center px-6 text-center text-sm text-[color:var(--nova-text-muted)] backdrop-blur-sm">
             No candle data found for this pair.
           </div>
         )}

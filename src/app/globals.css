@@ -1,8 +1,35 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --nova-bg: #0A0A0A;
+  --nova-bg-soft: #101213;
+  --nova-surface: rgba(10, 10, 10, 0.72);
+  --nova-surface-strong: rgba(14, 16, 17, 0.86);
+  --nova-surface-inner: rgba(10, 10, 10, 0.48);
+
+  --nova-slate: #536878;
+  --nova-sage-dark: #5E726B;
+  --nova-sage: #79867B;
+  --nova-sage-light: #B2BEB5;
+  --nova-text: #E5E4E2;
+  --nova-text-muted: rgba(178, 190, 181, 0.72);
+  --nova-text-faint: rgba(178, 190, 181, 0.45);
+
+  --nova-border: rgba(83, 104, 120, 0.28);
+  --nova-border-soft: rgba(178, 190, 181, 0.10);
+  --nova-glow: rgba(83, 104, 120, 0.16);
+
+  --nova-text-soft: rgba(229, 228, 226, 0.82);
+  --nova-border-strong: rgba(178, 190, 181, 0.16);
+  --nova-highlight: rgba(229, 228, 226, 0.035);
+  --nova-accent: var(--nova-sage-light);
+  --nova-accent-soft: var(--nova-sage);
+  --nova-accent-deep: var(--nova-slate);
+  --nova-danger: var(--nova-sage-light);
+  --nova-warning: var(--nova-sage);
+  --nova-success: var(--nova-sage-light);
+  --background: var(--nova-bg);
+  --foreground: var(--nova-text);
 }
 
 @theme inline {
@@ -14,13 +41,245 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: var(--nova-bg);
+    --foreground: var(--nova-text);
   }
+}
+
+html,
+body,
+main {
+  background: var(--nova-bg);
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: "Arial Narrow", "Inter", "Helvetica Neue", var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.035em;
+  text-rendering: geometricPrecision;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  color: inherit;
+}
+
+::selection {
+  background: rgba(83, 104, 120, 0.32);
+  color: var(--nova-text);
+}
+
+* {
+  scrollbar-color: rgba(83, 104, 120, 0.45) #0A0A0A;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 0;
+}
+
+*::-webkit-scrollbar-track {
+  background: #0A0A0A;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(83, 104, 120, 0.45);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(178, 190, 181, 0.45);
+  background-clip: padding-box;
+}
+
+@layer utilities {
+  @keyframes novaScoreSymbolRotate {
+    0% {
+      rotate: 0deg;
+    }
+    100% {
+      rotate: 360deg;
+    }
+  }
+
+  @keyframes novaScoreCoreBreath {
+    0%, 100% {
+      opacity: 0.22;
+      scale: 0.985;
+    }
+    50% {
+      opacity: 0.42;
+      scale: 1.015;
+    }
+  }
+
+  .nova-card {
+    position: relative;
+    background:
+      linear-gradient(
+        135deg,
+        rgba(83, 104, 120, 0.10),
+        rgba(10, 10, 10, 0.82) 42%,
+        rgba(94, 114, 107, 0.10)
+      );
+    border: 1px solid var(--nova-border-soft);
+    box-shadow:
+      inset 0 1px 0 rgba(229, 228, 226, 0.035),
+      0 24px 80px rgba(0, 0, 0, 0.34),
+      0 0 42px rgba(83, 104, 120, 0.06);
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+  }
+
+  .nova-card-strong {
+    position: relative;
+    background:
+      linear-gradient(
+        135deg,
+        rgba(83, 104, 120, 0.16),
+        rgba(10, 10, 10, 0.88) 46%,
+        rgba(94, 114, 107, 0.12)
+      );
+    border: 1px solid rgba(178, 190, 181, 0.16);
+    box-shadow:
+      inset 0 1px 0 rgba(229, 228, 226, 0.045),
+      0 28px 90px rgba(0, 0, 0, 0.42),
+      0 0 56px rgba(83, 104, 120, 0.10);
+    backdrop-filter: blur(32px);
+    -webkit-backdrop-filter: blur(32px);
+  }
+
+  .nova-card-inner {
+    position: relative;
+    background:
+      linear-gradient(
+        135deg,
+        rgba(10, 10, 10, 0.58),
+        rgba(16, 18, 19, 0.74),
+        rgba(83, 104, 120, 0.06)
+      );
+    border: 1px solid rgba(178, 190, 181, 0.09);
+    box-shadow: inset 0 1px 0 rgba(229, 228, 226, 0.025);
+  }
+
+  .nova-panel,
+  .nova-glass,
+  .nova-terminal-card {
+    position: relative;
+    background:
+      linear-gradient(
+        135deg,
+        rgba(83, 104, 120, 0.10),
+        rgba(10, 10, 10, 0.82) 42%,
+        rgba(94, 114, 107, 0.10)
+      );
+    border: 1px solid var(--nova-border-soft);
+    box-shadow:
+      inset 0 1px 0 rgba(229, 228, 226, 0.035),
+      0 24px 80px rgba(0, 0, 0, 0.34),
+      0 0 42px rgba(83, 104, 120, 0.06);
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+  }
+
+  .nova-panel-strong {
+    position: relative;
+    background:
+      linear-gradient(
+        135deg,
+        rgba(83, 104, 120, 0.16),
+        rgba(10, 10, 10, 0.88) 46%,
+        rgba(94, 114, 107, 0.12)
+      );
+    border: 1px solid rgba(178, 190, 181, 0.16);
+    box-shadow:
+      inset 0 1px 0 rgba(229, 228, 226, 0.045),
+      0 28px 90px rgba(0, 0, 0, 0.42),
+      0 0 56px rgba(83, 104, 120, 0.10);
+    backdrop-filter: blur(32px);
+    -webkit-backdrop-filter: blur(32px);
+  }
+
+  .nova-text-primary {
+    color: var(--nova-text);
+  }
+
+  .nova-text-muted {
+    color: var(--nova-text-muted);
+  }
+
+  .nova-border {
+    border-color: var(--nova-border);
+  }
+
+  .nova-button {
+    background: rgba(10, 10, 10, 0.55);
+    border: 1px solid rgba(178, 190, 181, 0.16);
+    color: var(--nova-text);
+  }
+
+  .nova-button:hover {
+    background: rgba(83, 104, 120, 0.18);
+  }
+
+  .nova-display {
+    font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+    font-weight: 400;
+    letter-spacing: 0.015em;
+    text-transform: uppercase;
+  }
+
+  .nova-tech {
+    font-family: "Arial Narrow", "Inter", "Helvetica Neue", sans-serif;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .nova-copy {
+    font-family: "Arial Narrow", "Inter", "Helvetica Neue", sans-serif;
+    letter-spacing: 0.045em;
+  }
+
+  .gradient-word {
+    background: linear-gradient(90deg, #E5E4E2 0%, #B2BEB5 45%, #536878 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-shadow: 0 0 28px rgba(178, 190, 181, 0.10);
+  }
+
+  .nova-chart-body > div,
+  .nova-chart-body table,
+  .nova-chart-body canvas {
+    height: 100% !important;
+  }
+
+  .entry-subtitle-glow {
+    color: rgba(178, 190, 181, 0.62);
+  }
+
+  .nova-glass-hover {
+    transition: transform 260ms ease, border-color 260ms ease, background 260ms ease, box-shadow 260ms ease;
+  }
+
+  .nova-glass-hover:hover {
+    transform: translateY(-1px) scale(1.01);
+    border-color: rgba(178, 190, 181, 0.18);
+    box-shadow:
+      inset 0 1px 0 rgba(229, 228, 226, 0.05),
+      0 28px 88px rgba(0, 0, 0, 0.42),
+      0 0 46px rgba(83, 104, 120, 0.10);
+  }
 }
