@@ -3074,7 +3074,7 @@ export function TerminalExperience({
   }
 
   return (
-    <main className="relative h-screen overflow-hidden bg-[var(--nova-bg)] text-[color:var(--nova-text)]">
+    <main className="nova-terminal-root relative h-screen overflow-hidden bg-[var(--nova-bg)] text-[color:var(--nova-text)]">
       {!hasTokenSelection && (
         <TerminalIdleState
           disabledReason={scanDisabledReason}
@@ -3117,7 +3117,7 @@ export function TerminalExperience({
       )}
 
       {hasTokenSelection && terminalRevealed && (
-      <div className="relative z-[3] flex h-screen bg-[var(--nova-bg)]">
+      <div className="nova-terminal-shell relative z-[3] flex h-screen bg-[var(--nova-bg)]">
         <div className="hidden lg:block">
           <Sidebar
             activeSection={activeSection}
@@ -3125,7 +3125,7 @@ export function TerminalExperience({
           />
         </div>
 
-        <section className="relative h-screen flex-1 overflow-y-auto overflow-x-hidden p-4 pb-8 lg:p-5 lg:pb-8">
+        <section className="nova-terminal-main relative h-screen flex-1 overflow-y-auto overflow-x-hidden p-4 pb-8 lg:p-5 lg:pb-8">
           <Header
             activeSection={activeSection}
             onNewScan={runNewIntelligenceScan}
@@ -3483,7 +3483,7 @@ function TerminalIdleState({
       <div className="relative z-10 flex w-full max-w-[1120px] flex-col items-center text-center">
         <motion.h1
           aria-label="See Beyond The Chart"
-          className="nova-display mx-auto flex max-w-[1120px] flex-nowrap justify-center gap-x-3 whitespace-nowrap text-4xl leading-[1.01] text-[color:var(--nova-text)] [text-shadow:0_0_34px_rgba(157,190,205,0.12),0_12px_42px_rgba(0,0,0,0.56)] sm:gap-x-4 sm:text-6xl lg:text-[4.6rem] xl:text-[5rem]"
+          className="nova-display nova-terminal-idle-title mx-auto flex max-w-[1120px] flex-nowrap justify-center gap-x-3 whitespace-nowrap text-4xl leading-[1.01] text-[color:var(--nova-text)] [text-shadow:0_0_34px_rgba(157,190,205,0.12),0_12px_42px_rgba(0,0,0,0.56)] sm:gap-x-4 sm:text-6xl lg:text-[4.6rem] xl:text-[5rem]"
         >
           {titleWords.map((word, index) => (
             <motion.span
@@ -4233,26 +4233,35 @@ function SectionTabs({
   onSelectSection: (section: TerminalSection) => void;
 }) {
   return (
-    <div className="mb-4 flex gap-2 overflow-x-auto pb-1 lg:hidden">
-      {terminalSections.map((section) => {
-        const isActive = section === activeSection;
+    <details className="nova-mobile-section-menu mb-4 lg:hidden">
+      <summary className="nova-card-inner flex min-h-11 cursor-pointer list-none items-center justify-between rounded-full px-4 py-2 text-xs uppercase tracking-[0.18em] text-[color:var(--nova-accent-soft)] [&::-webkit-details-marker]:hidden">
+        <span className="truncate">{activeSection}</span>
+        <span className="text-[color:var(--nova-text-muted)]">Menu</span>
+      </summary>
+      <div className="mt-2 grid gap-2 rounded-[1.4rem] nova-card p-2">
+        {terminalSections.map((section) => {
+          const isActive = section === activeSection;
 
-        return (
-          <button
-            key={section}
-            type="button"
-            onClick={() => onSelectSection(section)}
-            className={`shrink-0 rounded-full border px-4 py-2 text-xs backdrop-blur-2xl transition duration-300 ${
-              isActive
-                ? "border-[color:rgba(178,190,181,0.14)] bg-[rgba(83,104,120,0.12)] text-[color:var(--nova-accent-soft)] shadow-[0_0_24px_rgba(83,104,120,0.07)]"
-                : "border-[color:rgba(178,190,181,0.08)] nova-card-inner text-[color:var(--nova-text-muted)]"
-            }`}
-          >
-            {section}
-          </button>
-        );
-      })}
-    </div>
+          return (
+            <button
+              key={section}
+              type="button"
+              onClick={(event) => {
+                onSelectSection(section);
+                event.currentTarget.closest("details")?.removeAttribute("open");
+              }}
+              className={`min-h-11 rounded-full border px-4 py-2 text-left text-xs backdrop-blur-2xl transition duration-300 ${
+                isActive
+                  ? "border-[color:rgba(178,190,181,0.14)] bg-[rgba(83,104,120,0.12)] text-[color:var(--nova-accent-soft)] shadow-[0_0_24px_rgba(83,104,120,0.07)]"
+                  : "border-[color:rgba(178,190,181,0.08)] nova-card-inner text-[color:var(--nova-text-muted)]"
+              }`}
+            >
+              {section}
+            </button>
+          );
+        })}
+      </div>
+    </details>
   );
 }
 
@@ -6703,7 +6712,7 @@ function OverviewExecutiveSummary({
   const scoreItems = [...primaryItems, ...secondaryItems];
 
   return (
-    <div className="flex min-h-[640px] flex-col">
+    <div className="nova-overview-summary flex min-h-[640px] flex-col">
       <div className="grid flex-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
         {scoreItems.map((item) => (
           <OverviewExecutiveScoreCard
@@ -6858,7 +6867,7 @@ function OverviewExecutiveScoreCard({
 
   return (
     <div
-      className={`relative overflow-hidden rounded-[1.8rem] ${
+      className={`nova-overview-score-card relative overflow-hidden rounded-[1.8rem] ${
         isPrimaryScore
           ? `min-h-[102px] ${overviewScoreCardSurfaceClass}`
           : `min-h-[86px] ${overviewScoreCardSurfaceClass}`
@@ -6876,7 +6885,7 @@ function OverviewExecutiveScoreCard({
         style={{ opacity: isPrimaryScore ? 0.58 : 0.34 }}
       />
       <div
-        className={`pointer-events-none absolute left-[4.4rem] top-1/2 rounded-full ${coreSizeClass}`}
+        className={`nova-score-core pointer-events-none absolute left-[4.4rem] top-1/2 rounded-full ${coreSizeClass}`}
         style={{
           filter: `drop-shadow(0 0 ${isPrimaryScore ? 22 : 15}px rgba(83,104,120,${0.04 + energy * 0.1}))`,
           opacity: 0.76 + energy * 0.2,
@@ -6911,7 +6920,7 @@ function OverviewExecutiveScoreCard({
           </p>
         </div>
       </div>
-      <div className="relative flex h-full min-h-[inherit] flex-col justify-center pl-[8.6rem] pr-2 text-left">
+      <div className="nova-score-label relative flex h-full min-h-[inherit] flex-col justify-center pl-[8.6rem] pr-2 text-left">
         <p className="text-[0.72rem] uppercase tracking-[0.18em] text-[color:var(--nova-text-soft)]">
           {label}
         </p>

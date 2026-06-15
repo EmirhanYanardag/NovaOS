@@ -359,11 +359,11 @@ function NovaChartComponent({
   return (
     <div
       style={{ height: chartHeight + 96, minHeight: chartHeight + 96 }}
-      className="nova-card-strong nova-glass-hover relative flex flex-col overflow-hidden rounded-[1.75rem]"
+      className="nova-chart-card nova-card-strong nova-glass-hover relative flex flex-col overflow-hidden rounded-[1.75rem]"
     >
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(178,190,181,0.08),transparent_58%)]" />
 
-      <div className="relative z-20 flex shrink-0 items-center justify-between gap-6 px-5 py-4 backdrop-blur-xl">
+      <div className="relative z-20 flex shrink-0 flex-col gap-4 px-5 py-4 backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between sm:gap-6">
         <div className="min-w-0">
           <p className="text-xs uppercase tracking-[0.32em] text-[color:var(--nova-text-muted)]">
             {token} / USD
@@ -380,7 +380,7 @@ function NovaChartComponent({
           </div>
         </div>
 
-        <div className="shrink-0 text-right">
+        <div className="shrink-0 text-left sm:text-right">
           <p className="text-xs uppercase tracking-[0.32em] text-[color:var(--nova-text-muted)]">
             24H Volume
           </p>

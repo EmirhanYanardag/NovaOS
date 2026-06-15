@@ -105,7 +105,7 @@ function smoothScrollTo(id: string) {
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-[var(--nova-bg)] text-[color:var(--nova-text)]">
+    <main className="nova-landing min-h-screen bg-[var(--nova-bg)] text-[color:var(--nova-text)]">
       <header className="sticky top-0 z-50 border-b border-[color:var(--nova-border-soft)] bg-[rgba(10,10,10,0.86)] backdrop-blur-2xl">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5">
           <Link href="/" className="flex items-center gap-3">
@@ -170,7 +170,7 @@ export default function Home() {
             <motion.h1
               variants={staggerContainer}
               transition={{ staggerChildren: 0.16, delayChildren: 0.16 }}
-              className="nova-display max-w-5xl text-5xl leading-[0.98] text-[color:var(--nova-text)] md:text-7xl lg:text-8xl"
+              className="nova-display nova-hero-title max-w-5xl text-5xl leading-[0.98] text-[color:var(--nova-text)] md:text-7xl lg:text-8xl"
             >
               {heroWords.map((word) => (
                 <motion.span
@@ -215,7 +215,7 @@ export default function Home() {
               <p className="nova-tech mb-4 text-xs text-[color:var(--nova-accent-soft)]">
                 The Problem
               </p>
-              <h2 className="nova-display text-4xl leading-tight md:text-6xl">
+              <h2 className="nova-display nova-section-title text-4xl leading-tight md:text-6xl">
                 Charts show price. They don&apos;t explain{" "}
                 <span className="gradient-word">conviction.</span>
               </h2>
@@ -235,7 +235,7 @@ export default function Home() {
             <p className="nova-tech mb-4 text-xs text-[color:var(--nova-accent-soft)]">
               Workflow
             </p>
-            <h2 className="nova-display max-w-3xl text-4xl leading-tight md:text-6xl">
+            <h2 className="nova-display nova-section-title max-w-3xl text-4xl leading-tight md:text-6xl">
               How NovaOS <span className="gradient-word">Works</span>
             </h2>
             <p className="nova-copy mt-5 max-w-2xl text-sm leading-7 text-[color:var(--nova-text-soft)] md:text-base">
@@ -311,7 +311,7 @@ export default function Home() {
             <p className="nova-tech mb-4 text-xs text-[color:var(--nova-accent-soft)]">
               Explainability
             </p>
-            <h2 className="nova-display text-4xl md:text-6xl">
+            <h2 className="nova-display nova-section-title text-4xl md:text-6xl">
               Every score needs a <span className="gradient-word">reason.</span>
             </h2>
           </div>
@@ -331,7 +331,7 @@ export default function Home() {
 
       <section id="terminal" className="px-5 py-32 md:py-44">
         <RevealSection className="mx-auto max-w-5xl text-center">
-          <h2 className="nova-display text-4xl md:text-6xl">
+          <h2 className="nova-display nova-section-title text-4xl md:text-6xl">
             Start with a token. Leave with a <span className="gradient-word">thesis.</span>
           </h2>
           <Link
@@ -389,7 +389,7 @@ function SectionIntro({
       <p className="nova-tech mb-4 text-xs text-[color:var(--nova-accent-soft)]">
         {eyebrow}
       </p>
-      <h2 className="nova-display max-w-3xl text-4xl leading-tight md:text-6xl">
+      <h2 className="nova-display nova-section-title max-w-3xl text-4xl leading-tight md:text-6xl">
         {title}
       </h2>
       <p className="nova-copy mt-5 max-w-2xl text-sm leading-7 text-[color:var(--nova-text-soft)] md:text-base">

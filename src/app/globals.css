@@ -72,6 +72,18 @@ textarea {
   color: inherit;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 ::selection {
   background: rgba(83, 104, 120, 0.32);
   color: var(--nova-text);
@@ -281,5 +293,214 @@ textarea {
       inset 0 1px 0 rgba(229, 228, 226, 0.05),
       0 28px 88px rgba(0, 0, 0, 0.42),
       0 0 46px rgba(83, 104, 120, 0.10);
+  }
+}
+
+@media (max-width: 1279px) {
+  html,
+  body,
+  main {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  img,
+  svg,
+  canvas,
+  video {
+    max-width: 100%;
+  }
+
+  button,
+  a[role="button"],
+  input,
+  select,
+  textarea,
+  .nova-button {
+    min-height: 44px;
+  }
+
+  p,
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
+  span {
+    overflow-wrap: anywhere;
+  }
+
+  .nova-landing,
+  .nova-terminal-root,
+  .nova-terminal-shell,
+  .nova-terminal-main {
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  .nova-landing header > div {
+    padding-left: clamp(1rem, 4vw, 1.25rem);
+    padding-right: clamp(1rem, 4vw, 1.25rem);
+  }
+
+  .nova-landing section {
+    padding-left: clamp(1rem, 4vw, 1.25rem) !important;
+    padding-right: clamp(1rem, 4vw, 1.25rem) !important;
+  }
+
+  .nova-card,
+  .nova-card-strong,
+  .nova-card-inner,
+  .nova-terminal-card,
+  .nova-panel,
+  .nova-panel-strong {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .nova-glass-hover:hover {
+    transform: none;
+  }
+
+  .nova-display {
+    letter-spacing: 0.01em;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .nova-hero-title {
+    font-size: clamp(3rem, 15vw, 6rem) !important;
+    line-height: 0.96 !important;
+    max-width: min(100%, 44rem);
+    white-space: normal;
+  }
+
+  .nova-section-title {
+    font-size: clamp(2.35rem, 10.5vw, 4.5rem) !important;
+    line-height: 1.02 !important;
+  }
+
+  .nova-tech {
+    letter-spacing: clamp(0.08em, 2.8vw, 0.14em);
+  }
+
+  .nova-copy {
+    font-size: clamp(0.875rem, 2.8vw, 1rem);
+    letter-spacing: 0.035em;
+  }
+
+  .nova-terminal-root {
+    height: auto;
+    min-height: 100dvh;
+  }
+
+  .nova-terminal-shell {
+    display: block;
+    height: auto;
+    min-height: 100dvh;
+  }
+
+  .nova-terminal-main {
+    height: auto;
+    min-height: 100dvh;
+    padding: clamp(0.75rem, 3.5vw, 1.25rem);
+    padding-bottom: 2rem;
+  }
+
+  .nova-terminal-idle-title {
+    flex-wrap: wrap;
+    row-gap: 0.15em;
+    white-space: normal;
+    font-size: clamp(2.25rem, 12vw, 4.75rem) !important;
+    line-height: 0.98 !important;
+  }
+
+  .nova-mobile-section-menu,
+  .nova-mobile-section-menu > summary,
+  .nova-mobile-section-menu > div {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .nova-chart-card {
+    width: 100%;
+    max-width: 100%;
+    height: clamp(430px, 112vw, 620px) !important;
+    min-height: clamp(430px, 112vw, 620px) !important;
+  }
+
+  .nova-chart-body,
+  .nova-chart-body > div,
+  .nova-chart-body table,
+  .nova-chart-body canvas {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .nova-overview-summary {
+    min-height: 0 !important;
+  }
+
+  .nova-overview-summary > div {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .nova-overview-score-card {
+    min-height: 92px !important;
+  }
+
+  .nova-score-core {
+    left: 3.6rem !important;
+    height: 4.65rem !important;
+    width: 4.65rem !important;
+  }
+
+  .nova-score-label {
+    padding-left: 7rem !important;
+  }
+
+  .overflow-x-auto {
+    max-width: 100%;
+    overscroll-behavior-x: contain;
+  }
+}
+
+@media (max-width: 480px) {
+  .nova-landing header a[href="/terminal"] {
+    padding-left: 0.85rem;
+    padding-right: 0.85rem;
+    font-size: 0.72rem;
+  }
+
+  .nova-hero-title {
+    font-size: clamp(2.75rem, 17vw, 4rem) !important;
+  }
+
+  .nova-section-title {
+    font-size: clamp(2.1rem, 12vw, 3rem) !important;
+  }
+
+  .nova-terminal-idle-title {
+    font-size: clamp(2rem, 13vw, 3.2rem) !important;
+  }
+
+  .nova-chart-card {
+    height: clamp(400px, 128vw, 500px) !important;
+    min-height: clamp(400px, 128vw, 500px) !important;
+  }
+}
+
+@media (max-width: 360px) {
+  .nova-score-core {
+    left: 3.25rem !important;
+    height: 4.1rem !important;
+    width: 4.1rem !important;
+  }
+
+  .nova-score-label {
+    padding-left: 6.25rem !important;
   }
 }
