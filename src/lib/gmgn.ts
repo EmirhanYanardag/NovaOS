@@ -64,6 +64,28 @@ const SUPPORTED_GMGN_CHAINS = ["eth", "base", "bsc", "sol", "mantle"] as const;
 const DEFAULT_GMGN_API_BASE = "https://gmgn.ai";
 const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL);
 
+export type GmgnDirectFailureDiagnostic = {
+  baseUsed: string;
+  endpointPath: string;
+  status: number | null;
+  contentType: string | null;
+  responsePreview: string;
+  hasGMGNKey: boolean;
+  failingStep: string;
+  requestHeaders: Record<string, string | boolean>;
+  responseClassification: string;
+};
+
+export class GmgnDirectNonJsonError extends Error {
+  diagnostics: GmgnDirectFailureDiagnostic;
+
+  constructor(message: string, diagnostics: GmgnDirectFailureDiagnostic) {
+    super(message);
+    this.name = "GmgnDirectNonJsonError";
+    this.diagnostics = diagnostics;
+  }
+}
+
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -467,8 +489,11 @@ async function runGmgnCli(args: string[]) {
 
 function gmgnAuthHeaders() {
   const apiKey = process.env.GMGN_API_KEY || "";
-  const headers: HeadersInit = {
-    accept: "application/json",
+  const headers: Record<string, string> = {
+    accept: "application/json, text/plain, */*",
+    "user-agent": "Mozilla/5.0",
+    origin: "https://gmgn.ai",
+    referer: "https://gmgn.ai/",
   };
 
   if (apiKey) {
@@ -486,15 +511,90 @@ function gmgnApiBaseCandidates() {
     configured || "",
     DEFAULT_GMGN_API_BASE,
     "https://api.gmgn.ai",
+    "https://gmgn.ai/api",
+    "https://www.gmgn.ai",
   ].filter(Boolean))).map((base) => base.replace(/\/+$/, ""));
 }
 
 function candidateUrl(base: string, path: string, params: Record<string, string | number | undefined>) {
-  const url = new URL(path, `${base}/`);
+  const url = new URL(`${base}/${path.replace(/^\/+/, "")}`);
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== "") url.searchParams.set(key, String(value));
   }
   return url;
+}
+
+function sanitizedHeadersForLog(headers: HeadersInit) {
+  const record = headers as Record<string, string>;
+  return {
+    accept: record.accept,
+    "user-agent": record["user-agent"],
+    origin: record.origin,
+    referer: record.referer,
+    hasAuthorization: Boolean(record.Authorization),
+    hasXApiKey: Boolean(record["X-API-KEY"] || record["x-api-key"]),
+  };
+}
+
+function responsePreview(text: string) {
+  return text
+    .replace(process.env.GMGN_API_KEY || "__NO_KEY__", "[redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300);
+}
+
+function classifyNonJsonResponse({
+  status,
+  text,
+}: {
+  status: number;
+  text: string;
+}) {
+  const lower = text.toLowerCase();
+  if (lower.includes("cloudflare") || lower.includes("cf-ray") || lower.includes("checking your browser")) return "cloudflare";
+  if (status === 404 || lower.includes("404") || lower.includes("not found")) return "404-html-or-wrong-route";
+  if (status === 401 || status === 403 || lower.includes("login") || lower.includes("sign in") || lower.includes("unauthorized")) return "login-auth-page";
+  if (status === 429 || lower.includes("rate limit") || lower.includes("too many requests")) return "rate-limit-page";
+  if (lower.includes("blocked") || lower.includes("access denied") || lower.includes("forbidden")) return "blocked-request";
+  if (lower.startsWith("<!doctype html") || lower.startsWith("<html")) return "html-non-json";
+  return "non-json";
+}
+
+function directFailureDiagnostic({
+  baseUsed,
+  contentType,
+  endpointPath,
+  failingStep,
+  headers,
+  responseText,
+  status,
+}: {
+  baseUsed: string;
+  contentType: string | null;
+  endpointPath: string;
+  failingStep: string;
+  headers: HeadersInit;
+  responseText: string;
+  status: number | null;
+}): GmgnDirectFailureDiagnostic {
+  return {
+    baseUsed,
+    endpointPath,
+    status,
+    contentType,
+    responsePreview: responsePreview(responseText),
+    hasGMGNKey: Boolean(process.env.GMGN_API_KEY),
+    failingStep,
+    requestHeaders: sanitizedHeadersForLog(headers),
+    responseClassification: status === null
+      ? "network-error"
+      : classifyNonJsonResponse({ status, text: responseText }),
+  };
+}
+
+function logDirectDiagnostic(diagnostic: GmgnDirectFailureDiagnostic) {
+  console.warn("[GMGN direct HTTP]", diagnostic);
 }
 
 function sanitizeProviderError(message: string) {
@@ -513,9 +613,11 @@ function sanitizeProviderError(message: string) {
 
 async function fetchJsonCandidates({
   candidates,
+  failingStep,
   source,
 }: {
   candidates: URL[];
+  failingStep: string;
   source: string;
 }) {
   const failures: string[] = [];
@@ -523,33 +625,64 @@ async function fetchJsonCandidates({
   for (const url of candidates) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12_000);
+    const headers = gmgnAuthHeaders();
 
     try {
       const response = await fetch(url.toString(), {
-        headers: gmgnAuthHeaders(),
+        headers,
         cache: "no-store",
         signal: controller.signal,
       });
       const text = await response.text();
+      const contentType = response.headers.get("content-type");
       let data: unknown = null;
+      const diagnosticBase = {
+        baseUsed: url.pathname.startsWith("/api/")
+          ? `${url.origin}/api`
+          : url.origin,
+        contentType,
+        endpointPath: `${url.pathname}${url.search}`,
+        failingStep,
+        headers,
+        responseText: text,
+        status: response.status,
+      };
 
       if (text.trim()) {
         try {
           data = JSON.parse(text);
         } catch {
-          failures.push(`${url.pathname}: non-json response`);
+          const diagnostic = directFailureDiagnostic(diagnosticBase);
+          logDirectDiagnostic(diagnostic);
+          if (failingStep === "top-holders") {
+            throw new GmgnDirectNonJsonError("GMGN top holders returned non-JSON response.", diagnostic);
+          }
+          failures.push(`${url.pathname}: non-json response (${diagnostic.responseClassification})`);
           continue;
         }
       }
 
       if (!response.ok) {
+        logDirectDiagnostic(directFailureDiagnostic(diagnosticBase));
         failures.push(`${url.pathname}: HTTP ${response.status}`);
         continue;
       }
 
       return data;
     } catch (error) {
+      if (error instanceof GmgnDirectNonJsonError) throw error;
       const reason = error instanceof Error ? error.message : "unknown error";
+      logDirectDiagnostic(directFailureDiagnostic({
+        baseUsed: url.pathname.startsWith("/api/")
+          ? `${url.origin}/api`
+          : url.origin,
+        contentType: null,
+        endpointPath: `${url.pathname}${url.search}`,
+        failingStep,
+        headers,
+        responseText: reason,
+        status: null,
+      }));
       failures.push(`${url.pathname}: ${reason}`);
     } finally {
       clearTimeout(timeout);
@@ -578,7 +711,7 @@ async function fetchGmgnWalletActivityDirect(input: GmgnWalletActivityInput) {
     }),
   ]);
 
-  return fetchJsonCandidates({ candidates, source: "GMGN wallet activity" });
+  return fetchJsonCandidates({ candidates, failingStep: "wallet-activity", source: "GMGN wallet activity" });
 }
 
 async function fetchGmgnTopHoldersDirect(input: GmgnTopHoldersInput) {
@@ -605,7 +738,7 @@ async function fetchGmgnTopHoldersDirect(input: GmgnTopHoldersInput) {
     }),
   ]);
 
-  return fetchJsonCandidates({ candidates, source: "GMGN top holders" });
+  return fetchJsonCandidates({ candidates, failingStep: "top-holders", source: "GMGN top holders" });
 }
 
 export async function runGmgnWalletActivity({

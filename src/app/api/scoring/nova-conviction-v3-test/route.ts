@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { GmgnDirectNonJsonError } from "@/lib/gmgn";
 import { fetchGmgnRiskStats, type GmgnRiskStats } from "@/lib/gmgn-risk-stats";
 import { fetchGmgnSmartMoneyTrades } from "@/lib/gmgn-smart-money-trades";
 import { computeNovaConvictionV3 } from "@/lib/nova-conviction-v3-engine";
@@ -221,6 +222,52 @@ function holderAlphaExecutionErrorResponse({
   );
 }
 
+function gmgnTopHoldersNonJsonResponse({
+  error,
+  requestRunId,
+  runtimeMs,
+}: {
+  error: GmgnDirectNonJsonError;
+  requestRunId: string | null;
+  runtimeMs: number;
+}) {
+  const diagnostic = error.diagnostics;
+  const sanitizedDiagnostics = {
+    baseUsed: diagnostic.baseUsed,
+    endpointPath: diagnostic.endpointPath,
+    status: diagnostic.status,
+    contentType: diagnostic.contentType,
+    responsePreview: diagnostic.responsePreview,
+    hasGMGNKey: diagnostic.hasGMGNKey,
+  };
+
+  productionLog("GMGN top holders returned non-json", {
+    failingStep: diagnostic.failingStep,
+    sanitizedError: diagnostic.responseClassification,
+    runtimeMs,
+    walletIndex: null,
+    baseUsed: diagnostic.baseUsed,
+    endpointPath: diagnostic.endpointPath,
+    status: diagnostic.status,
+    contentType: diagnostic.contentType,
+    responsePreview: diagnostic.responsePreview,
+    requestHeaders: diagnostic.requestHeaders,
+    responseClassification: diagnostic.responseClassification,
+    runId: requestRunId,
+  });
+
+  return NextResponse.json(
+    {
+      success: false,
+      error: "GMGN top holders returned a non-JSON response.",
+      errorCode: "GMGN_TOP_HOLDERS_NON_JSON",
+      requestRunId,
+      diagnostics: sanitizedDiagnostics,
+    },
+    { status: 502, headers: noStoreHeaders }
+  );
+}
+
 function holderDepthErrorResponse({
   debug,
   holderAlphaDepth,
@@ -414,33 +461,25 @@ export async function GET(request: Request) {
   const analysisMode = parsedMode.analysisMode;
   const effectiveModeConfig = getTop100HolderAlphaModeConfig(analysisMode);
   const forceRefresh = parseBoolean(searchParams.get("forceRefresh"));
-  const defaultWalletMaxPages = IS_VERCEL_RUNTIME ? 4 : DEFAULT_WALLET_MAX_PAGES;
-  const maxWalletMaxPages = IS_VERCEL_RUNTIME ? 8 : MAX_WALLET_MAX_PAGES;
-  const defaultWalletMaxActivities = IS_VERCEL_RUNTIME ? 600 : DEFAULT_WALLET_MAX_ACTIVITIES;
-  const maxWalletMaxActivities = IS_VERCEL_RUNTIME ? 1200 : MAX_WALLET_MAX_ACTIVITIES;
-  const defaultMaxTokens = IS_VERCEL_RUNTIME ? 20 : DEFAULT_MAX_TOKENS;
-  const maxMaxTokens = IS_VERCEL_RUNTIME ? 35 : MAX_TOKENS;
-  const defaultConcurrency = IS_VERCEL_RUNTIME ? 1 : DEFAULT_CONCURRENCY;
-  const maxConcurrency = IS_VERCEL_RUNTIME ? 2 : MAX_CONCURRENCY;
   const walletMaxPages = parseBoundedInteger(
     searchParams.get("walletMaxPages"),
-    defaultWalletMaxPages,
-    maxWalletMaxPages
+    DEFAULT_WALLET_MAX_PAGES,
+    MAX_WALLET_MAX_PAGES
   );
   const walletMaxActivities = parseBoundedInteger(
     searchParams.get("walletMaxActivities"),
-    defaultWalletMaxActivities,
-    maxWalletMaxActivities
+    DEFAULT_WALLET_MAX_ACTIVITIES,
+    MAX_WALLET_MAX_ACTIVITIES
   );
   const maxTokens = parseBoundedInteger(
     searchParams.get("maxTokens"),
-    defaultMaxTokens,
-    maxMaxTokens
+    DEFAULT_MAX_TOKENS,
+    MAX_TOKENS
   );
   const concurrency = parseBoundedInteger(
     searchParams.get("concurrency"),
-    defaultConcurrency,
-    maxConcurrency
+    DEFAULT_CONCURRENCY,
+    MAX_CONCURRENCY
   );
   const interval = searchParams.get("interval") || "1h";
 
@@ -508,6 +547,14 @@ export async function GET(request: Request) {
     holderAlpha = holderAlphaRun.holderAlpha;
     warnings.push(...holderAlpha.warnings);
   } catch (error) {
+    if (error instanceof GmgnDirectNonJsonError) {
+      return gmgnTopHoldersNonJsonResponse({
+        error,
+        requestRunId: runId,
+        runtimeMs: Date.now() - holderAlphaStartedAt,
+      });
+    }
+
     if (isGmgnRateLimitError(error)) {
       return gmgnRateLimitResponse({
         address: normalizedAddress,

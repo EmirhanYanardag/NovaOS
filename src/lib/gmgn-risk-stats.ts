@@ -217,7 +217,10 @@ async function runGmgnTokenInfo(chain: string, address: string) {
 function gmgnAuthHeaders() {
   const apiKey = process.env.GMGN_API_KEY || "";
   const headers: Record<string, string> = {
-    accept: "application/json",
+    accept: "application/json, text/plain, */*",
+    "user-agent": "Mozilla/5.0",
+    origin: "https://gmgn.ai",
+    referer: "https://gmgn.ai/",
   };
 
   if (apiKey) {
@@ -235,15 +238,83 @@ function gmgnApiBaseCandidates() {
     configured || "",
     DEFAULT_GMGN_API_BASE,
     "https://api.gmgn.ai",
+    "https://gmgn.ai/api",
+    "https://www.gmgn.ai",
   ].filter(Boolean))).map((base) => base.replace(/\/+$/, ""));
 }
 
 function candidateUrl(base: string, path: string, params: Record<string, string | number | undefined> = {}) {
-  const url = new URL(path, `${base}/`);
+  const url = new URL(`${base}/${path.replace(/^\/+/, "")}`);
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== "") url.searchParams.set(key, String(value));
   }
   return url;
+}
+
+function sanitizedHeadersForLog(headers: Record<string, string>) {
+  return {
+    accept: headers.accept,
+    "user-agent": headers["user-agent"],
+    origin: headers.origin,
+    referer: headers.referer,
+    hasAuthorization: Boolean(headers.Authorization),
+    hasXApiKey: Boolean(headers["X-API-KEY"] || headers["x-api-key"]),
+  };
+}
+
+function responsePreview(text: string) {
+  return text
+    .replace(process.env.GMGN_API_KEY || "__NO_KEY__", "[redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300);
+}
+
+function classifyNonJsonResponse(status: number, text: string) {
+  const lower = text.toLowerCase();
+  if (lower.includes("cloudflare") || lower.includes("cf-ray") || lower.includes("checking your browser")) return "cloudflare";
+  if (status === 404 || lower.includes("404") || lower.includes("not found")) return "404-html-or-wrong-route";
+  if (status === 401 || status === 403 || lower.includes("login") || lower.includes("sign in") || lower.includes("unauthorized")) return "login-auth-page";
+  if (status === 429 || lower.includes("rate limit") || lower.includes("too many requests")) return "rate-limit-page";
+  if (lower.includes("blocked") || lower.includes("access denied") || lower.includes("forbidden")) return "blocked-request";
+  if (lower.startsWith("<!doctype html") || lower.startsWith("<html")) return "html-non-json";
+  return "non-json";
+}
+
+function gmgnBaseUsed(url: URL) {
+  return url.pathname.startsWith("/api/") ? `${url.origin}/api` : url.origin;
+}
+
+function logDirectDiagnostic({
+  contentType,
+  endpointPath,
+  failingStep,
+  headers,
+  responseText,
+  status,
+  url,
+}: {
+  contentType: string | null;
+  endpointPath: string;
+  failingStep: string;
+  headers: Record<string, string>;
+  responseText: string;
+  status: number | null;
+  url: URL;
+}) {
+  console.warn("[GMGN direct HTTP]", {
+    baseUsed: gmgnBaseUsed(url),
+    endpointPath,
+    status,
+    contentType,
+    responsePreview: responsePreview(responseText),
+    hasGMGNKey: Boolean(process.env.GMGN_API_KEY),
+    failingStep,
+    requestHeaders: sanitizedHeadersForLog(headers),
+    responseClassification: status === null
+      ? "network-error"
+      : classifyNonJsonResponse(status, responseText),
+  });
 }
 
 function sanitizeProviderError(message: string) {
@@ -266,30 +337,61 @@ async function fetchJsonCandidates(candidates: URL[]) {
   for (const url of candidates) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12_000);
+    const headers = gmgnAuthHeaders();
 
     try {
       const response = await fetch(url.toString(), {
-        headers: gmgnAuthHeaders(),
+        headers,
         cache: "no-store",
         signal: controller.signal,
       });
       const text = await response.text();
+      const contentType = response.headers.get("content-type");
+      const endpointPath = `${url.pathname}${url.search}`;
       let data: unknown = null;
       if (text.trim()) {
         try {
           data = JSON.parse(text);
         } catch {
-          failures.push(`${url.pathname}: non-json response`);
+          logDirectDiagnostic({
+            contentType,
+            endpointPath,
+            failingStep: "risk-stats",
+            headers,
+            responseText: text,
+            status: response.status,
+            url,
+          });
+          failures.push(`${url.pathname}: non-json response (${classifyNonJsonResponse(response.status, text)})`);
           continue;
         }
       }
       if (!response.ok) {
+        logDirectDiagnostic({
+          contentType,
+          endpointPath,
+          failingStep: "risk-stats",
+          headers,
+          responseText: text,
+          status: response.status,
+          url,
+        });
         failures.push(`${url.pathname}: HTTP ${response.status}`);
         continue;
       }
       return data;
     } catch (error) {
-      failures.push(`${url.pathname}: ${error instanceof Error ? error.message : "unknown error"}`);
+      const reason = error instanceof Error ? error.message : "unknown error";
+      logDirectDiagnostic({
+        contentType: null,
+        endpointPath: `${url.pathname}${url.search}`,
+        failingStep: "risk-stats",
+        headers,
+        responseText: reason,
+        status: null,
+        url,
+      });
+      failures.push(`${url.pathname}: ${reason}`);
     } finally {
       clearTimeout(timeout);
     }
