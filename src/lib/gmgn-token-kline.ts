@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { fetchGmgnOpenApiJson } from "@/lib/gmgn-openapi";
 import { fetchGmgnRiskStats } from "@/lib/gmgn-risk-stats";
 
 const execFileAsync = promisify(execFile);
@@ -58,6 +59,7 @@ const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 1000;
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const SOL_ADDRESS_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL);
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -456,6 +458,33 @@ async function runGmgnTokenKline({
   return parseJsonOutput(stdout);
 }
 
+async function fetchGmgnTokenKlineDirect({
+  chain,
+  address,
+  interval,
+  from,
+  to,
+}: {
+  chain: string;
+  address: string;
+  interval: TokenKlineInterval;
+  from?: number;
+  to?: number;
+}) {
+  return fetchGmgnOpenApiJson({
+    failingStep: "token-kline",
+    path: "/v1/market/token_kline",
+    query: {
+      chain,
+      address,
+      resolution: interval,
+      from,
+      to,
+    },
+    source: "GMGN token kline",
+  });
+}
+
 async function fetchTokenInfoTotalSupply({
   chain,
   address,
@@ -535,13 +564,22 @@ export async function fetchGmgnTokenKline(
   validateChain(normalizedChain);
   validateAddress(normalizedChain, normalizedAddress);
 
-  const raw = await runGmgnTokenKline({
-    chain: normalizedChain,
-    address: normalizedAddress,
-    interval,
-    from,
-    to,
-  });
+  const useDirect = IS_VERCEL_RUNTIME || process.env.GMGN_DIRECT_HTTP === "true";
+  const raw = useDirect
+    ? await fetchGmgnTokenKlineDirect({
+        chain: normalizedChain,
+        address: normalizedAddress,
+        interval,
+        from,
+        to,
+      })
+    : await runGmgnTokenKline({
+        chain: normalizedChain,
+        address: normalizedAddress,
+        interval,
+        from,
+        to,
+      });
 
   const rawTotalSupply = totalSupplyFromPayload(raw);
   const totalSupply =
@@ -587,7 +625,7 @@ export async function fetchGmgnTokenKline(
     priceHigh: maxNumber(prices),
     marketCapLow: minNumber(marketCaps),
     marketCapHigh: maxNumber(marketCaps),
-    sourceCommand: "gmgn-cli market kline",
+    sourceCommand: useDirect ? "gmgn-openapi /v1/market/token_kline" : "gmgn-cli market kline",
     candles,
     warnings,
     ...(options.includeRaw ? { raw } : {}),
