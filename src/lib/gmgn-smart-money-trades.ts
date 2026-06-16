@@ -68,7 +68,7 @@ export type GmgnSmartMoneyTradesResult = {
 const SUPPORTED_SMART_MONEY_CHAINS = ["sol", "bsc", "base", "eth"] as const;
 const MAX_LIMIT = 200;
 const DEFAULT_LIMIT = 100;
-const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL);
+const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL || process.env.NETLIFY);
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);

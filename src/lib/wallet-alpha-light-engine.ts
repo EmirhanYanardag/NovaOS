@@ -102,7 +102,7 @@ const LIGHT_FORMULA_WITH_DISTRIBUTION =
   "0.30 pnlEfficiency + 0.20 distribution + 0.17 winRate + 0.13 tradeDepth + 0.10 riskControl + 0.06 activity + 0.04 dataCompleteness";
 const LIGHT_FORMULA_NO_DISTRIBUTION =
   "no-distribution formula: 0.42 pnlEfficiency + 0.17 winRate + 0.18 tradeDepth + 0.13 riskControl + 0.06 activity + 0.04 dataCompleteness";
-const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL);
+const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL || process.env.NETLIFY);
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);

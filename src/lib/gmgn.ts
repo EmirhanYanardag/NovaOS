@@ -63,7 +63,7 @@ const SOL_WALLET_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const SAFE_CURSOR_PATTERN = /^[A-Za-z0-9._:+=/-]{1,512}$/;
 const SAFE_ORDER_BY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const SUPPORTED_GMGN_CHAINS = ["eth", "base", "bsc", "sol", "mantle"] as const;
-const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL);
+const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL || process.env.NETLIFY);
 
 export type GmgnDirectFailureDiagnostic = {
   baseUsed: string;

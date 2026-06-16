@@ -4,12 +4,14 @@ import { randomUUID } from "node:crypto";
 type QueryValue = string | number | boolean | Array<string | number | boolean> | undefined | null;
 
 const DEFAULT_GMGN_OPENAPI_BASE = "https://openapi.gmgn.ai";
+const DEFAULT_UNKNOWN_ENDPOINT_DELAY_MS = 500;
 
 type GmgnEndpointKind =
   | "topHoldersRequests"
   | "walletActivityRequests"
   | "walletStatsRequests"
   | "tokenInfoRequests"
+  | "tokenKlineRequests"
   | "smartMoneyRequests"
   | "otherGmgnRequests";
 
@@ -21,6 +23,7 @@ type GmgnOpenApiRequestStore = {
   walletActivityRequests: number;
   walletStatsRequests: number;
   tokenInfoRequests: number;
+  tokenKlineRequests: number;
   smartMoneyRequests: number;
   otherGmgnRequests: number;
   endpointCounts: Record<string, number>;
@@ -31,6 +34,20 @@ type GmgnOpenApiRequestStore = {
     errorCode: GmgnOpenApiErrorCode | "GMGN_OPENAPI_NETWORK" | null;
     failingStep: string;
   } | null;
+  totalQueuedRequests: number;
+  totalExecutedRequests: number;
+  totalDedupedRequests: number;
+  queueWaitMsTotal: number;
+  scanAbortedAfterRateLimit: boolean;
+  firstRateLimit: {
+    endpointPath: string;
+    status: number | null;
+    message: string | null;
+    retryAfterSeconds: number | null;
+    resetAt: string | null;
+    failingStep: string;
+  } | null;
+  requestCache: Map<string, Promise<unknown>>;
 };
 
 const gmgnRequestStorage = new AsyncLocalStorage<GmgnOpenApiRequestStore>();
@@ -44,11 +61,19 @@ function createRequestStore(): GmgnOpenApiRequestStore {
     walletActivityRequests: 0,
     walletStatsRequests: 0,
     tokenInfoRequests: 0,
+    tokenKlineRequests: 0,
     smartMoneyRequests: 0,
     otherGmgnRequests: 0,
     endpointCounts: {},
     uniqueWallets: new Set<string>(),
     firstFailure: null,
+    totalQueuedRequests: 0,
+    totalExecutedRequests: 0,
+    totalDedupedRequests: 0,
+    queueWaitMsTotal: 0,
+    scanAbortedAfterRateLimit: false,
+    firstRateLimit: null,
+    requestCache: new Map<string, Promise<unknown>>(),
   };
 }
 
@@ -67,12 +92,23 @@ export function getGmgnOpenApiRequestSummary() {
       walletActivityRequests: 0,
       walletStatsRequests: 0,
       tokenInfoRequests: 0,
+      tokenKlineRequests: 0,
       smartMoneyRequests: 0,
       otherGmgnRequests: 0,
       endpointCounts: {},
       uniqueWalletCount: 0,
       requestsPerHolderAverage: 0,
       firstFailure: null,
+      totalQueuedRequests: 0,
+      totalExecutedRequests: 0,
+      totalDedupedRequests: 0,
+      queueWaitMsTotal: 0,
+      scanAbortedAfterRateLimit: false,
+      firstRateLimitEndpoint: null,
+      firstRateLimitStatus: null,
+      firstRateLimitMessage: null,
+      retryAfterSeconds: null,
+      resetAt: null,
     };
   }
 
@@ -85,6 +121,7 @@ export function getGmgnOpenApiRequestSummary() {
     walletActivityRequests: store.walletActivityRequests,
     walletStatsRequests: store.walletStatsRequests,
     tokenInfoRequests: store.tokenInfoRequests,
+    tokenKlineRequests: store.tokenKlineRequests,
     smartMoneyRequests: store.smartMoneyRequests,
     otherGmgnRequests: store.otherGmgnRequests,
     endpointCounts: { ...store.endpointCounts },
@@ -93,6 +130,16 @@ export function getGmgnOpenApiRequestSummary() {
       ? Number((store.totalRequests / uniqueWalletCount).toFixed(2))
       : 0,
     firstFailure: store.firstFailure,
+    totalQueuedRequests: store.totalQueuedRequests,
+    totalExecutedRequests: store.totalExecutedRequests,
+    totalDedupedRequests: store.totalDedupedRequests,
+    queueWaitMsTotal: store.queueWaitMsTotal,
+    scanAbortedAfterRateLimit: store.scanAbortedAfterRateLimit,
+    firstRateLimitEndpoint: store.firstRateLimit?.endpointPath ?? null,
+    firstRateLimitStatus: store.firstRateLimit?.status ?? null,
+    firstRateLimitMessage: store.firstRateLimit?.message ?? null,
+    retryAfterSeconds: store.firstRateLimit?.retryAfterSeconds ?? null,
+    resetAt: store.firstRateLimit?.resetAt ?? null,
   };
 }
 
@@ -101,6 +148,7 @@ function endpointKind(path: string): GmgnEndpointKind {
   if (path === "/v1/user/wallet_activity") return "walletActivityRequests";
   if (path === "/v1/user/wallet_stats") return "walletStatsRequests";
   if (path === "/v1/token/info") return "tokenInfoRequests";
+  if (path === "/v1/market/token_kline") return "tokenKlineRequests";
   if (path === "/v1/user/smartmoney") return "smartMoneyRequests";
   return "otherGmgnRequests";
 }
@@ -153,6 +201,55 @@ function recordGmgnOpenApiAttempt({
   };
 }
 
+const endpointDelayMs: Record<string, number> = {
+  "/v1/token/info": 100,
+  "/v1/market/token_top_holders": 400,
+  "/v1/market/token_kline": 250,
+  "/v1/user/wallet_activity": 700,
+  "/v1/user/wallet_stats": 700,
+  "/v1/user/smartmoney": 150,
+};
+
+let gmgnQueueTail: Promise<void> = Promise.resolve();
+const lastExecutedAtByEndpoint = new Map<string, number>();
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function gmgnEndpointDelay(path: string) {
+  return endpointDelayMs[path] ?? DEFAULT_UNKNOWN_ENDPOINT_DELAY_MS;
+}
+
+async function runThroughGmgnQueue<T>(path: string, task: () => Promise<T>) {
+  const store = gmgnRequestStorage.getStore();
+  const queuedAt = Date.now();
+  if (store) store.totalQueuedRequests += 1;
+
+  const previous = gmgnQueueTail;
+  let release: () => void = () => undefined;
+  gmgnQueueTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await previous.catch(() => undefined);
+
+  try {
+    const now = Date.now();
+    const minDelayMs = gmgnEndpointDelay(path);
+    const lastExecutedAt = lastExecutedAtByEndpoint.get(path) ?? 0;
+    const waitMs = Math.max(0, minDelayMs - (now - lastExecutedAt));
+    const queueWaitMs = Date.now() - queuedAt + waitMs;
+    if (store) store.queueWaitMsTotal += queueWaitMs;
+    if (waitMs > 0) await sleep(waitMs);
+    lastExecutedAtByEndpoint.set(path, Date.now());
+    if (store) store.totalExecutedRequests += 1;
+    return await task();
+  } finally {
+    release();
+  }
+}
+
 export type GmgnOpenApiErrorCode =
   | "GMGN_OPENAPI_AUTH_ACCESS"
   | "GMGN_OPENAPI_BAD_REQUEST"
@@ -176,6 +273,8 @@ export type GmgnOpenApiDiagnostics = {
   gmgnCode: unknown;
   gmgnMessage: unknown;
   gmgnError: unknown;
+  retryAfterSeconds: number | null;
+  resetAt: string | null;
   responsePreview: string;
   requestHeaderNames: string[];
   failingStep: string;
@@ -190,6 +289,57 @@ export class GmgnOpenApiError extends Error {
     this.name = "GmgnOpenApiError";
     this.diagnostics = diagnostics;
   }
+}
+
+function unknownRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
+function nestedValue(root: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    if (key in root) return root[key];
+  }
+
+  for (const value of Object.values(root)) {
+    const nested = unknownRecord(value);
+    if (!nested) continue;
+    const found = nestedValue(nested, keys);
+    if (found !== undefined) return found;
+  }
+
+  return undefined;
+}
+
+function parseRetryAfterSeconds(value: string | null) {
+  if (!value) return null;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric >= 0) return Math.ceil(numeric);
+  const parsedDate = Date.parse(value);
+  if (Number.isFinite(parsedDate)) {
+    return Math.max(0, Math.ceil((parsedDate - Date.now()) / 1000));
+  }
+  return null;
+}
+
+function parseResetAt(value: unknown) {
+  if (typeof value === "string" && value.trim()) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      const ms = numeric > 10_000_000_000 ? numeric : numeric * 1000;
+      return new Date(ms).toISOString();
+    }
+
+    const parsedDate = Date.parse(value);
+    if (Number.isFinite(parsedDate)) return new Date(parsedDate).toISOString();
+    return value;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const ms = value > 10_000_000_000 ? value : value * 1000;
+    return new Date(ms).toISOString();
+  }
+
+  return null;
 }
 
 function gmgnOpenApiBase() {
@@ -253,6 +403,22 @@ function buildOpenApiUrl(path: string, query: Record<string, QueryValue>) {
   return url;
 }
 
+function openApiRequestCacheKey(path: string, query: Record<string, QueryValue>) {
+  const params = new URLSearchParams();
+  const entries = Object.entries(query).sort(([left], [right]) => left.localeCompare(right));
+
+  for (const [key, value] of entries) {
+    if (value === undefined || value === null || value === "") continue;
+    if (Array.isArray(value)) {
+      for (const item of [...value].sort()) params.append(key, String(item));
+    } else {
+      params.set(key, String(value));
+    }
+  }
+
+  return `${path}?${params.toString()}`;
+}
+
 function gmgnOpenApiHeaders() {
   return {
     accept: "application/json, text/plain, */*",
@@ -283,14 +449,17 @@ function classifyOpenApiFailure({
 }): GmgnOpenApiErrorCode {
   const jsonRecord =
     parsedJson && typeof parsedJson === "object"
-      ? (parsedJson as { error?: unknown; message?: unknown })
+      ? (parsedJson as { code?: unknown; error?: unknown; message?: unknown })
       : null;
+  const codeValue = jsonRecord?.code;
   const combined = [
     text,
+    String(codeValue ?? ""),
     String(jsonRecord?.error ?? ""),
     String(jsonRecord?.message ?? ""),
   ].join(" ");
 
+  if (codeValue === 429 || String(codeValue) === "429") return "GMGN_OPENAPI_RATE_LIMIT";
   if (status === 429 || explicitRateLimitText(combined)) return "GMGN_OPENAPI_RATE_LIMIT";
   if (status === 401 || status === 403) return "GMGN_OPENAPI_AUTH_ACCESS";
   if (status === 400) return "GMGN_OPENAPI_BAD_REQUEST";
@@ -305,6 +474,7 @@ function diagnosticsFor({
   errorCode,
   failingStep,
   parsedJson,
+  retryAfterHeader,
   responseText,
   status,
   url,
@@ -313,6 +483,7 @@ function diagnosticsFor({
   errorCode: GmgnOpenApiErrorCode | null;
   failingStep: string;
   parsedJson: unknown;
+  retryAfterHeader?: string | null;
   responseText: string;
   status: number | null;
   url: URL;
@@ -323,6 +494,16 @@ function diagnosticsFor({
     parsedJson && typeof parsedJson === "object"
       ? (parsedJson as { code?: unknown; error?: unknown; message?: unknown })
       : null;
+  const resetAt = jsonRecord
+    ? parseResetAt(nestedValue(jsonRecord, ["reset_at", "resetAt", "reset_time", "resetTime"]))
+    : null;
+  const retryAfterFromJson = jsonRecord
+    ? nestedValue(jsonRecord, ["retry_after", "retryAfter", "retry_after_seconds", "retryAfterSeconds"])
+    : null;
+  const retryAfterSeconds = parseRetryAfterSeconds(retryAfterHeader ?? null)
+    ?? (typeof retryAfterFromJson === "number" || typeof retryAfterFromJson === "string"
+      ? parseRetryAfterSeconds(String(retryAfterFromJson))
+      : null);
 
   return {
     ok: status !== null && status >= 200 && status < 300 && !errorCode,
@@ -338,6 +519,8 @@ function diagnosticsFor({
     gmgnCode: jsonRecord?.code ?? null,
     gmgnMessage: jsonRecord?.message ?? null,
     gmgnError: jsonRecord?.error ?? null,
+    retryAfterSeconds,
+    resetAt,
     responsePreview: sanitize(responseText),
     requestHeaderNames: Object.keys(gmgnOpenApiHeaders()),
     failingStep,
@@ -380,7 +563,43 @@ function logOpenApi429({
   });
 }
 
-export async function fetchGmgnOpenApiJson({
+function rateLimitMessage(parsedJson: unknown, fallbackText: string) {
+  const jsonRecord = unknownRecord(parsedJson);
+  const message = jsonRecord
+    ? nestedValue(jsonRecord, ["message", "error", "msg", "reason"])
+    : null;
+  if (typeof message === "string" && message.trim()) return sanitize(message);
+  return sanitize(fallbackText);
+}
+
+function markScanRateLimited({
+  diagnostics,
+  parsedJson,
+  text,
+}: {
+  diagnostics: GmgnOpenApiDiagnostics;
+  parsedJson: unknown;
+  text: string;
+}) {
+  if (diagnostics.errorCode !== "GMGN_OPENAPI_RATE_LIMIT") return;
+
+  const store = gmgnRequestStorage.getStore();
+  if (!store) return;
+
+  store.scanAbortedAfterRateLimit = true;
+  if (!store.firstRateLimit) {
+    store.firstRateLimit = {
+      endpointPath: diagnostics.endpointPath,
+      status: diagnostics.status,
+      message: rateLimitMessage(parsedJson, text),
+      retryAfterSeconds: diagnostics.retryAfterSeconds,
+      resetAt: diagnostics.resetAt,
+      failingStep: diagnostics.failingStep,
+    };
+  }
+}
+
+async function executeGmgnOpenApiRequest({
   failingStep,
   path,
   query,
@@ -397,14 +616,22 @@ export async function fetchGmgnOpenApiJson({
   const timeout = setTimeout(() => controller.abort(), 20_000);
 
   try {
-    const response = await fetch(url.toString(), {
-      method: "GET",
-      headers: gmgnOpenApiHeaders(),
-      cache: "no-store",
-      signal: controller.signal,
+    const response = await runThroughGmgnQueue(path, async () => {
+      const store = gmgnRequestStorage.getStore();
+      if (store?.scanAbortedAfterRateLimit) {
+        throw new Error("GMGN scan aborted after first rate limit.");
+      }
+
+      return fetch(url.toString(), {
+        method: "GET",
+        headers: gmgnOpenApiHeaders(),
+        cache: "no-store",
+        signal: controller.signal,
+      });
     });
     const text = await response.text();
     const contentType = response.headers.get("content-type");
+    const retryAfterHeader = response.headers.get("retry-after");
     let payload: unknown;
     let wasJson = true;
 
@@ -435,9 +662,15 @@ export async function fetchGmgnOpenApiJson({
         errorCode,
         failingStep,
         parsedJson: null,
+        retryAfterHeader,
         responseText: text,
         status: response.status,
         url,
+      });
+      markScanRateLimited({
+        diagnostics,
+        parsedJson: null,
+        text,
       });
       logOpenApiFailure({
         diagnostics,
@@ -470,9 +703,15 @@ export async function fetchGmgnOpenApiJson({
         errorCode,
         failingStep,
         parsedJson: payload,
+        retryAfterHeader,
         responseText: text,
         status: response.status,
         url,
+      });
+      markScanRateLimited({
+        diagnostics,
+        parsedJson: payload,
+        text,
       });
       logOpenApiFailure({
         diagnostics,
@@ -507,9 +746,15 @@ export async function fetchGmgnOpenApiJson({
         errorCode,
         failingStep,
         parsedJson: payload,
+        retryAfterHeader,
         responseText: text,
         status: response.status,
         url,
+      });
+      markScanRateLimited({
+        diagnostics,
+        parsedJson: payload,
+        text,
       });
       logOpenApiFailure({
         diagnostics,
@@ -544,15 +789,17 @@ export async function fetchGmgnOpenApiJson({
     if (error instanceof GmgnOpenApiError) throw error;
 
     if (error instanceof Error) {
+      const store = gmgnRequestStorage.getStore();
+      const abortedAfterRateLimit = store?.scanAbortedAfterRateLimit === true;
       finalizeRequest?.({
         success: false,
         status: null,
-        errorCode: "GMGN_OPENAPI_NETWORK",
+        errorCode: abortedAfterRateLimit ? "GMGN_OPENAPI_RATE_LIMIT" : "GMGN_OPENAPI_NETWORK",
         failingStep,
       });
       const diagnostics = diagnosticsFor({
         contentType: null,
-        errorCode: "GMGN_OPENAPI_NETWORK",
+        errorCode: abortedAfterRateLimit ? "GMGN_OPENAPI_RATE_LIMIT" : "GMGN_OPENAPI_NETWORK",
         failingStep,
         parsedJson: null,
         responseText: error.message,
@@ -563,12 +810,70 @@ export async function fetchGmgnOpenApiJson({
         diagnostics,
         path,
       });
-      throw new GmgnOpenApiError(`${source} failed via GMGN OpenAPI network request.`, diagnostics);
+      throw new GmgnOpenApiError(
+        abortedAfterRateLimit
+          ? `${source} stopped because GMGN rate limit was already reached in this scan.`
+          : `${source} failed via GMGN OpenAPI network request.`,
+        diagnostics
+      );
     }
 
     throw error;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+export async function fetchGmgnOpenApiJson({
+  failingStep,
+  path,
+  query,
+  source,
+}: {
+  failingStep: string;
+  path: string;
+  query: Record<string, QueryValue>;
+  source: string;
+}) {
+  const store = gmgnRequestStorage.getStore();
+  const cacheKey = openApiRequestCacheKey(path, query);
+
+  if (store?.scanAbortedAfterRateLimit) {
+    const url = buildOpenApiUrl(path, query);
+    const diagnostics = diagnosticsFor({
+      contentType: null,
+      errorCode: "GMGN_OPENAPI_RATE_LIMIT",
+      failingStep,
+      parsedJson: null,
+      responseText: "GMGN scan aborted after first rate limit.",
+      status: null,
+      url,
+    });
+    throw new GmgnOpenApiError(
+      `${source} stopped because GMGN rate limit was already reached in this scan.`,
+      diagnostics
+    );
+  }
+
+  const existing = store?.requestCache.get(cacheKey);
+  if (existing) {
+    if (store) store.totalDedupedRequests += 1;
+    return existing;
+  }
+
+  const requestPromise = executeGmgnOpenApiRequest({
+    failingStep,
+    path,
+    query,
+    source,
+  });
+  store?.requestCache.set(cacheKey, requestPromise);
+
+  try {
+    return await requestPromise;
+  } catch (error) {
+    store?.requestCache.delete(cacheKey);
+    throw error;
   }
 }
 

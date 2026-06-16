@@ -59,7 +59,7 @@ const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 1000;
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const SOL_ADDRESS_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL);
+const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL || process.env.NETLIFY);
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);

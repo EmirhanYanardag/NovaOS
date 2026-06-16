@@ -43,7 +43,7 @@ export type GmgnRiskStats = {
 const SUPPORTED_GMGN_CHAINS = ["eth", "base", "bsc", "sol", "mantle"] as const;
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const SOL_ADDRESS_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL);
+const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL || process.env.NETLIFY);
 
 const RATIO_FIELDS = {
   top10HolderPercentage: "stat.top_10_holder_rate",

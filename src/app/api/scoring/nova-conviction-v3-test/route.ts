@@ -47,7 +47,7 @@ const DEFAULT_MAX_TOKENS = 50;
 const MAX_TOKENS = 100;
 const DEFAULT_CONCURRENCY = 2;
 const MAX_CONCURRENCY = 5;
-const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL);
+const IS_VERCEL_RUNTIME = Boolean(process.env.VERCEL || process.env.NETLIFY);
 const CHILD_PROCESS_USED = !IS_VERCEL_RUNTIME && process.env.GMGN_DIRECT_HTTP !== "true";
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const SOL_ADDRESS_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -158,8 +158,19 @@ function logScanRequestSummary({
     walletActivityRequests: summary.walletActivityRequests,
     walletStatsRequests: summary.walletStatsRequests,
     tokenInfoRequests: summary.tokenInfoRequests,
+    tokenKlineRequests: summary.tokenKlineRequests,
     smartMoneyRequests: summary.smartMoneyRequests,
     otherGmgnRequests: summary.otherGmgnRequests,
+    totalQueuedRequests: summary.totalQueuedRequests,
+    totalExecutedRequests: summary.totalExecutedRequests,
+    totalDedupedRequests: summary.totalDedupedRequests,
+    firstRateLimitEndpoint: summary.firstRateLimitEndpoint,
+    firstRateLimitStatus: summary.firstRateLimitStatus,
+    firstRateLimitMessage: summary.firstRateLimitMessage,
+    queueWaitMsTotal: summary.queueWaitMsTotal,
+    scanAbortedAfterRateLimit: summary.scanAbortedAfterRateLimit,
+    retryAfterSeconds: summary.retryAfterSeconds,
+    resetAt: summary.resetAt,
     endpointCounts: summary.endpointCounts,
     uniqueWalletCount: summary.uniqueWalletCount,
     holderCount: holderAlphaDepth?.holderCount ?? null,
@@ -210,6 +221,13 @@ function gmgnRateLimitResponse({
   stage: string;
 }) {
   const openApiDiagnostics = error instanceof GmgnOpenApiError ? error.diagnostics : null;
+  const summary = getGmgnOpenApiRequestSummary();
+  const retryAfterSeconds = openApiDiagnostics?.retryAfterSeconds ?? summary.retryAfterSeconds;
+  const resetAt = openApiDiagnostics?.resetAt ?? summary.resetAt;
+  const gmgnMessage =
+    typeof openApiDiagnostics?.gmgnMessage === "string"
+      ? openApiDiagnostics.gmgnMessage
+      : summary.firstRateLimitMessage;
   console.error("NOVA_INTERNAL_429", {
     reason: openApiDiagnostics?.errorCode ?? "rate-limit-classifier",
     stage,
@@ -222,7 +240,9 @@ function gmgnRateLimitResponse({
     endpointPath: openApiDiagnostics?.endpointPath ?? null,
     status: openApiDiagnostics?.status ?? null,
     gmgnCode: openApiDiagnostics?.gmgnCode ?? null,
-    gmgnMessage: openApiDiagnostics?.gmgnMessage ?? null,
+    gmgnMessage,
+    retryAfterSeconds,
+    resetAt,
   });
   productionLog("SCAN_FAIL", {
     runId: requestRunId,
@@ -259,12 +279,18 @@ function gmgnRateLimitResponse({
       error: "GMGN rate limit reached. Please wait before starting another scan.",
       errorCode: "GMGN_RATE_LIMIT",
       retryable: true,
+      retryAfterSeconds,
+      resetAt,
+      message: gmgnMessage,
       requestRunId,
       debug: {
         stage,
         analysisMode,
         chain,
         address,
+        retryAfterSeconds,
+        resetAt,
+        message: gmgnMessage,
       },
     },
     { status: 429, headers: noStoreHeaders }
