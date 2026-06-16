@@ -1,8 +1,157 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 
 type QueryValue = string | number | boolean | Array<string | number | boolean> | undefined | null;
 
 const DEFAULT_GMGN_OPENAPI_BASE = "https://openapi.gmgn.ai";
+
+type GmgnEndpointKind =
+  | "topHoldersRequests"
+  | "walletActivityRequests"
+  | "walletStatsRequests"
+  | "tokenInfoRequests"
+  | "smartMoneyRequests"
+  | "otherGmgnRequests";
+
+type GmgnOpenApiRequestStore = {
+  totalRequests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  topHoldersRequests: number;
+  walletActivityRequests: number;
+  walletStatsRequests: number;
+  tokenInfoRequests: number;
+  smartMoneyRequests: number;
+  otherGmgnRequests: number;
+  endpointCounts: Record<string, number>;
+  uniqueWallets: Set<string>;
+  firstFailure: {
+    endpointPath: string;
+    status: number | null;
+    errorCode: GmgnOpenApiErrorCode | "GMGN_OPENAPI_NETWORK" | null;
+    failingStep: string;
+  } | null;
+};
+
+const gmgnRequestStorage = new AsyncLocalStorage<GmgnOpenApiRequestStore>();
+
+function createRequestStore(): GmgnOpenApiRequestStore {
+  return {
+    totalRequests: 0,
+    successfulRequests: 0,
+    failedRequests: 0,
+    topHoldersRequests: 0,
+    walletActivityRequests: 0,
+    walletStatsRequests: 0,
+    tokenInfoRequests: 0,
+    smartMoneyRequests: 0,
+    otherGmgnRequests: 0,
+    endpointCounts: {},
+    uniqueWallets: new Set<string>(),
+    firstFailure: null,
+  };
+}
+
+export function runWithGmgnOpenApiRequestTracking<T>(callback: () => Promise<T>) {
+  return gmgnRequestStorage.run(createRequestStore(), callback);
+}
+
+export function getGmgnOpenApiRequestSummary() {
+  const store = gmgnRequestStorage.getStore();
+  if (!store) {
+    return {
+      totalRequests: 0,
+      successfulRequests: 0,
+      failedRequests: 0,
+      topHoldersRequests: 0,
+      walletActivityRequests: 0,
+      walletStatsRequests: 0,
+      tokenInfoRequests: 0,
+      smartMoneyRequests: 0,
+      otherGmgnRequests: 0,
+      endpointCounts: {},
+      uniqueWalletCount: 0,
+      requestsPerHolderAverage: 0,
+      firstFailure: null,
+    };
+  }
+
+  const uniqueWalletCount = store.uniqueWallets.size;
+  return {
+    totalRequests: store.totalRequests,
+    successfulRequests: store.successfulRequests,
+    failedRequests: store.failedRequests,
+    topHoldersRequests: store.topHoldersRequests,
+    walletActivityRequests: store.walletActivityRequests,
+    walletStatsRequests: store.walletStatsRequests,
+    tokenInfoRequests: store.tokenInfoRequests,
+    smartMoneyRequests: store.smartMoneyRequests,
+    otherGmgnRequests: store.otherGmgnRequests,
+    endpointCounts: { ...store.endpointCounts },
+    uniqueWalletCount,
+    requestsPerHolderAverage: uniqueWalletCount > 0
+      ? Number((store.totalRequests / uniqueWalletCount).toFixed(2))
+      : 0,
+    firstFailure: store.firstFailure,
+  };
+}
+
+function endpointKind(path: string): GmgnEndpointKind {
+  if (path === "/v1/market/token_top_holders") return "topHoldersRequests";
+  if (path === "/v1/user/wallet_activity") return "walletActivityRequests";
+  if (path === "/v1/user/wallet_stats") return "walletStatsRequests";
+  if (path === "/v1/token/info") return "tokenInfoRequests";
+  if (path === "/v1/user/smartmoney") return "smartMoneyRequests";
+  return "otherGmgnRequests";
+}
+
+function recordGmgnOpenApiAttempt({
+  path,
+  url,
+}: {
+  path: string;
+  url: URL;
+}) {
+  const store = gmgnRequestStorage.getStore();
+  if (!store) return null;
+
+  const kind = endpointKind(path);
+  const wallet = url.searchParams.get("wallet_address") || url.searchParams.get("wallet");
+  store.totalRequests += 1;
+  store[kind] += 1;
+  store.endpointCounts[path] = (store.endpointCounts[path] || 0) + 1;
+  if (wallet) store.uniqueWallets.add(wallet.toLowerCase());
+
+  let finalized = false;
+  return ({
+    success,
+    status,
+    errorCode,
+    failingStep,
+  }: {
+    success: boolean;
+    status: number | null;
+    errorCode: GmgnOpenApiErrorCode | "GMGN_OPENAPI_NETWORK" | null;
+    failingStep: string;
+  }) => {
+    if (finalized) return;
+    finalized = true;
+    if (success) {
+      store.successfulRequests += 1;
+      return;
+    }
+
+    store.failedRequests += 1;
+    if (!store.firstFailure) {
+      store.firstFailure = {
+        endpointPath: `${url.pathname}${url.search}`,
+        status,
+        errorCode,
+        failingStep,
+      };
+    }
+  };
+}
 
 export type GmgnOpenApiErrorCode =
   | "GMGN_OPENAPI_AUTH_ACCESS"
@@ -243,6 +392,7 @@ export async function fetchGmgnOpenApiJson({
   source: string;
 }) {
   const url = buildOpenApiUrl(path, query);
+  const finalizeRequest = recordGmgnOpenApiAttempt({ path, url });
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
 
@@ -262,6 +412,18 @@ export async function fetchGmgnOpenApiJson({
       payload = text.trim() ? JSON.parse(text) : null;
     } catch {
       wasJson = false;
+      const errorCode = classifyOpenApiFailure({
+        parsedJson: null,
+        status: response.status,
+        text,
+        wasJson,
+      });
+      finalizeRequest?.({
+        success: false,
+        status: response.status,
+        errorCode,
+        failingStep,
+      });
       logOpenApi429({
         response,
         text,
@@ -270,12 +432,7 @@ export async function fetchGmgnOpenApiJson({
       });
       const diagnostics = diagnosticsFor({
         contentType,
-        errorCode: classifyOpenApiFailure({
-          parsedJson: null,
-          status: response.status,
-          text,
-          wasJson,
-        }),
+        errorCode,
         failingStep,
         parsedJson: null,
         responseText: text,
@@ -290,6 +447,18 @@ export async function fetchGmgnOpenApiJson({
     }
 
     if (!response.ok) {
+      const errorCode = classifyOpenApiFailure({
+        parsedJson: payload,
+        status: response.status,
+        text,
+        wasJson,
+      });
+      finalizeRequest?.({
+        success: false,
+        status: response.status,
+        errorCode,
+        failingStep,
+      });
       logOpenApi429({
         response,
         text,
@@ -298,12 +467,7 @@ export async function fetchGmgnOpenApiJson({
       });
       const diagnostics = diagnosticsFor({
         contentType,
-        errorCode: classifyOpenApiFailure({
-          parsedJson: payload,
-          status: response.status,
-          text,
-          wasJson,
-        }),
+        errorCode,
         failingStep,
         parsedJson: payload,
         responseText: text,
@@ -326,14 +490,21 @@ export async function fetchGmgnOpenApiJson({
       "code" in payload &&
       (payload as { code?: unknown }).code !== 0
     ) {
+      const errorCode = classifyOpenApiFailure({
+        parsedJson: payload,
+        status: response.status,
+        text,
+        wasJson,
+      });
+      finalizeRequest?.({
+        success: false,
+        status: response.status,
+        errorCode,
+        failingStep,
+      });
       const diagnostics = diagnosticsFor({
         contentType,
-        errorCode: classifyOpenApiFailure({
-          parsedJson: payload,
-          status: response.status,
-          text,
-          wasJson,
-        }),
+        errorCode,
         failingStep,
         parsedJson: payload,
         responseText: text,
@@ -353,14 +524,32 @@ export async function fetchGmgnOpenApiJson({
     }
 
     if (payload && typeof payload === "object" && "data" in payload) {
+      finalizeRequest?.({
+        success: true,
+        status: response.status,
+        errorCode: null,
+        failingStep,
+      });
       return (payload as { data?: unknown }).data;
     }
 
+    finalizeRequest?.({
+      success: true,
+      status: response.status,
+      errorCode: null,
+      failingStep,
+    });
     return payload;
   } catch (error) {
     if (error instanceof GmgnOpenApiError) throw error;
 
     if (error instanceof Error) {
+      finalizeRequest?.({
+        success: false,
+        status: null,
+        errorCode: "GMGN_OPENAPI_NETWORK",
+        failingStep,
+      });
       const diagnostics = diagnosticsFor({
         contentType: null,
         errorCode: "GMGN_OPENAPI_NETWORK",

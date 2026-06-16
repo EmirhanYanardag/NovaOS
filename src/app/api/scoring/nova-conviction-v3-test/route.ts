@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { GmgnDirectNonJsonError } from "@/lib/gmgn";
-import { GmgnOpenApiError } from "@/lib/gmgn-openapi";
+import {
+  getGmgnOpenApiRequestSummary,
+  GmgnOpenApiError,
+  runWithGmgnOpenApiRequestTracking,
+} from "@/lib/gmgn-openapi";
 import { fetchGmgnRiskStats, type GmgnRiskStats } from "@/lib/gmgn-risk-stats";
 import { fetchGmgnSmartMoneyTrades } from "@/lib/gmgn-smart-money-trades";
 import { computeNovaConvictionV3 } from "@/lib/nova-conviction-v3-engine";
@@ -114,6 +118,60 @@ function productionLog(
   });
 }
 
+function logScanRequestSummary({
+  address,
+  analysisMode,
+  chain,
+  errorCode = null,
+  holderAlphaDepth = null,
+  requestRunId,
+  runtimeMs = null,
+  stage = null,
+}: {
+  address: string;
+  analysisMode: AnalysisMode;
+  chain: string;
+  errorCode?: string | null;
+  holderAlphaDepth?: HolderAlphaDepth | null;
+  requestRunId: string | null;
+  runtimeMs?: number | null;
+  stage?: string | null;
+}) {
+  const summary = getGmgnOpenApiRequestSummary();
+  const holderDivisor =
+    holderAlphaDepth?.analyzedWalletCount && holderAlphaDepth.analyzedWalletCount > 0
+      ? holderAlphaDepth.analyzedWalletCount
+      : summary.uniqueWalletCount;
+
+  console.log("SCAN_REQUEST_SUMMARY", {
+    mode: analysisMode,
+    runId: requestRunId,
+    chain,
+    address,
+    stage,
+    errorCode,
+    runtimeMs,
+    totalRequests: summary.totalRequests,
+    successfulRequests: summary.successfulRequests,
+    failedRequests: summary.failedRequests,
+    topHoldersRequests: summary.topHoldersRequests,
+    walletActivityRequests: summary.walletActivityRequests,
+    walletStatsRequests: summary.walletStatsRequests,
+    tokenInfoRequests: summary.tokenInfoRequests,
+    smartMoneyRequests: summary.smartMoneyRequests,
+    otherGmgnRequests: summary.otherGmgnRequests,
+    endpointCounts: summary.endpointCounts,
+    uniqueWalletCount: summary.uniqueWalletCount,
+    holderCount: holderAlphaDepth?.holderCount ?? null,
+    analyzedWalletCount: holderAlphaDepth?.analyzedWalletCount ?? null,
+    failedWalletCount: holderAlphaDepth?.failedWalletCount ?? null,
+    requestsPerHolderAverage: holderDivisor > 0
+      ? Number((summary.totalRequests / holderDivisor).toFixed(2))
+      : 0,
+    firstFailure: summary.firstFailure,
+  });
+}
+
 function isGmgnRateLimitText(value: unknown) {
   const text = String(value ?? "").toLowerCase();
   return (
@@ -176,6 +234,14 @@ function gmgnRateLimitResponse({
     analysisMode,
     endpointPath: openApiDiagnostics?.endpointPath ?? null,
     status: openApiDiagnostics?.status ?? null,
+  });
+  logScanRequestSummary({
+    address,
+    analysisMode,
+    chain,
+    errorCode: openApiDiagnostics?.errorCode ?? "GMGN_RATE_LIMIT",
+    requestRunId,
+    stage,
   });
 
   console.error("[Nova V3] GMGN rate limit", {
@@ -249,6 +315,15 @@ function holderAlphaExecutionErrorResponse({
     address,
     analysisMode,
   });
+  logScanRequestSummary({
+    address,
+    analysisMode,
+    chain,
+    errorCode: "HOLDER_ALPHA_SOURCE_UNAVAILABLE",
+    requestRunId,
+    runtimeMs,
+    stage: "holder-alpha-execution",
+  });
 
   return NextResponse.json(
     {
@@ -263,10 +338,16 @@ function holderAlphaExecutionErrorResponse({
 }
 
 function gmgnTopHoldersNonJsonResponse({
+  address,
+  analysisMode,
+  chain,
   error,
   requestRunId,
   runtimeMs,
 }: {
+  address: string;
+  analysisMode: AnalysisMode;
+  chain: string;
   error: GmgnDirectNonJsonError;
   requestRunId: string | null;
   runtimeMs: number;
@@ -302,6 +383,15 @@ function gmgnTopHoldersNonJsonResponse({
     runtimeMs,
     endpointPath: diagnostic.endpointPath,
     status: diagnostic.status,
+  });
+  logScanRequestSummary({
+    address,
+    analysisMode,
+    chain,
+    errorCode: "GMGN_TOP_HOLDERS_NON_JSON",
+    requestRunId,
+    runtimeMs,
+    stage: diagnostic.failingStep,
   });
 
   return NextResponse.json(
@@ -473,7 +563,7 @@ Route examples:
 /api/scoring/nova-conviction-v3-test?chain=eth&address=<token>&analysisMode=balanced&forceRefresh=true&runId=<run>
 /api/scoring/nova-conviction-v3-test?chain=eth&address=<token>&analysisMode=deep&forceRefresh=true&runId=<run>
 */
-export async function GET(request: Request) {
+async function handleGet(request: Request) {
   const startedAt = Date.now();
   const { searchParams } = new URL(request.url);
   const runId = searchParams.get("runId")?.trim() || null;
@@ -606,6 +696,9 @@ export async function GET(request: Request) {
   } catch (error) {
     if (error instanceof GmgnDirectNonJsonError) {
       return gmgnTopHoldersNonJsonResponse({
+        address: normalizedAddress,
+        analysisMode,
+        chain,
         error,
         requestRunId: runId,
         runtimeMs: Date.now() - holderAlphaStartedAt,
@@ -637,6 +730,15 @@ export async function GET(request: Request) {
         sourceDebug: error.debug,
       };
       productionLog("Top holders fetched zero rows", debug);
+      logScanRequestSummary({
+        address: normalizedAddress,
+        analysisMode,
+        chain,
+        errorCode: "HOLDER_ALPHA_ZERO_HOLDERS",
+        requestRunId: runId,
+        runtimeMs: Date.now() - holderAlphaStartedAt,
+        stage: "top-holders-fetch",
+      });
 
       return NextResponse.json(
         {
@@ -824,6 +926,17 @@ export async function GET(request: Request) {
     });
 
     if (holderAlphaDepth.analyzedWalletCount <= 0) {
+      logScanRequestSummary({
+        address: normalizedAddress,
+        analysisMode,
+        chain,
+        errorCode: "HOLDER_ALPHA_DEPTH_INVALID",
+        holderAlphaDepth,
+        requestRunId: runId,
+        runtimeMs: Date.now() - startedAt,
+        stage: "holder-alpha-depth-validation",
+      });
+
       return holderDepthErrorResponse({
         requestRunId: runId,
         holderAlphaDepth,
@@ -854,6 +967,16 @@ export async function GET(request: Request) {
     riskPressure,
     riskStats,
     warnings,
+  });
+
+  logScanRequestSummary({
+    address: normalizedAddress,
+    analysisMode,
+    chain,
+    holderAlphaDepth,
+    requestRunId: runId,
+    runtimeMs: Date.now() - startedAt,
+    stage: "scan-complete",
   });
 
   return NextResponse.json({
@@ -924,4 +1047,8 @@ export async function GET(request: Request) {
     },
     warnings: conviction.warnings,
   }, { headers: noStoreHeaders });
+}
+
+export async function GET(request: Request) {
+  return runWithGmgnOpenApiRequestTracking(() => handleGet(request));
 }
