@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { GmgnDirectNonJsonError } from "@/lib/gmgn";
+import { GmgnOpenApiError } from "@/lib/gmgn-openapi";
 import { fetchGmgnRiskStats, type GmgnRiskStats } from "@/lib/gmgn-risk-stats";
 import { fetchGmgnSmartMoneyTrades } from "@/lib/gmgn-smart-money-trades";
 import { computeNovaConvictionV3 } from "@/lib/nova-conviction-v3-engine";
@@ -117,16 +118,19 @@ function isGmgnRateLimitText(value: unknown) {
   const text = String(value ?? "").toLowerCase();
   return (
     text.includes("http 429") ||
-    text.includes("rate_limit") ||
     text.includes("rate limit") ||
-    text.includes("temporarily banned") ||
-    text.includes("rate limit resets")
+    text.includes("too many requests") ||
+    text.includes("quota")
   );
 }
 
 function isGmgnRateLimitError(error: unknown) {
+  if (error instanceof GmgnOpenApiError) {
+    return error.diagnostics.errorCode === "GMGN_OPENAPI_RATE_LIMIT";
+  }
+
   if (error instanceof Error) {
-    return isGmgnRateLimitText(error.message) || isGmgnRateLimitText(error.stack);
+    return isGmgnRateLimitText(error.message);
   }
 
   return isGmgnRateLimitText(error);

@@ -4,6 +4,45 @@ type QueryValue = string | number | boolean | Array<string | number | boolean> |
 
 const DEFAULT_GMGN_OPENAPI_BASE = "https://openapi.gmgn.ai";
 
+export type GmgnOpenApiErrorCode =
+  | "GMGN_OPENAPI_AUTH_ACCESS"
+  | "GMGN_OPENAPI_BAD_REQUEST"
+  | "GMGN_OPENAPI_RATE_LIMIT"
+  | "GMGN_OPENAPI_UPSTREAM"
+  | "GMGN_OPENAPI_NON_JSON"
+  | "GMGN_OPENAPI_NETWORK"
+  | "GMGN_OPENAPI_BUSINESS_ERROR";
+
+export type GmgnOpenApiDiagnostics = {
+  ok: boolean;
+  status: number | null;
+  endpointPath: string;
+  baseUsed: string;
+  method: "GET";
+  hasGMGNKey: boolean;
+  hasClientId: boolean;
+  timestampPreview: string | null;
+  timestampFormat: "unix-seconds" | "missing" | "invalid";
+  contentType: string | null;
+  gmgnCode: unknown;
+  gmgnMessage: unknown;
+  gmgnError: unknown;
+  responsePreview: string;
+  requestHeaderNames: string[];
+  failingStep: string;
+  errorCode: GmgnOpenApiErrorCode | null;
+};
+
+export class GmgnOpenApiError extends Error {
+  diagnostics: GmgnOpenApiDiagnostics;
+
+  constructor(message: string, diagnostics: GmgnOpenApiDiagnostics) {
+    super(message);
+    this.name = "GmgnOpenApiError";
+    this.diagnostics = diagnostics;
+  }
+}
+
 function gmgnOpenApiBase() {
   const configured = process.env.GMGN_API_BASE?.trim();
   if (!configured) return DEFAULT_GMGN_OPENAPI_BASE;
@@ -38,6 +77,11 @@ function sanitize(value: string) {
     .slice(0, 500);
 }
 
+function timestampFormat(value: string | null) {
+  if (!value) return "missing" as const;
+  return /^\d{10}$/.test(value) ? "unix-seconds" as const : "invalid" as const;
+}
+
 function buildOpenApiUrl(path: string, query: Record<string, QueryValue>) {
   const url = new URL(`${gmgnOpenApiBase()}${path}`);
   const params = new URLSearchParams();
@@ -68,36 +112,100 @@ function gmgnOpenApiHeaders() {
   };
 }
 
-function logOpenApiFailure({
+function explicitRateLimitText(value: string) {
+  const text = value.toLowerCase();
+  return (
+    text.includes("rate limit") ||
+    text.includes("too many requests") ||
+    text.includes("quota")
+  );
+}
+
+function classifyOpenApiFailure({
+  parsedJson,
+  status,
+  text,
+  wasJson,
+}: {
+  parsedJson: unknown;
+  status: number | null;
+  text: string;
+  wasJson: boolean;
+}): GmgnOpenApiErrorCode {
+  const jsonRecord =
+    parsedJson && typeof parsedJson === "object"
+      ? (parsedJson as { error?: unknown; message?: unknown })
+      : null;
+  const combined = [
+    text,
+    String(jsonRecord?.error ?? ""),
+    String(jsonRecord?.message ?? ""),
+  ].join(" ");
+
+  if (status === 429 || explicitRateLimitText(combined)) return "GMGN_OPENAPI_RATE_LIMIT";
+  if (status === 401 || status === 403) return "GMGN_OPENAPI_AUTH_ACCESS";
+  if (status === 400) return "GMGN_OPENAPI_BAD_REQUEST";
+  if (status !== null && status >= 500) return "GMGN_OPENAPI_UPSTREAM";
+  if (!wasJson) return "GMGN_OPENAPI_NON_JSON";
+  if (status === null) return "GMGN_OPENAPI_NETWORK";
+  return "GMGN_OPENAPI_BUSINESS_ERROR";
+}
+
+function diagnosticsFor({
   contentType,
+  errorCode,
   failingStep,
-  path,
+  parsedJson,
   responseText,
   status,
   url,
 }: {
   contentType: string | null;
+  errorCode: GmgnOpenApiErrorCode | null;
   failingStep: string;
-  path: string;
+  parsedJson: unknown;
   responseText: string;
   status: number | null;
   url: URL;
+}): GmgnOpenApiDiagnostics {
+  const timestamp = url.searchParams.get("timestamp");
+  const clientId = url.searchParams.get("client_id");
+  const jsonRecord =
+    parsedJson && typeof parsedJson === "object"
+      ? (parsedJson as { code?: unknown; error?: unknown; message?: unknown })
+      : null;
+
+  return {
+    ok: status !== null && status >= 200 && status < 300 && !errorCode,
+    status,
+    endpointPath: `${url.pathname}${url.search}`,
+    baseUsed: url.origin,
+    method: "GET",
+    hasGMGNKey: Boolean(process.env.GMGN_API_KEY),
+    hasClientId: Boolean(clientId),
+    timestampPreview: timestamp ? `${timestamp.slice(0, 4)}...${timestamp.slice(-2)}` : null,
+    timestampFormat: timestampFormat(timestamp),
+    contentType,
+    gmgnCode: jsonRecord?.code ?? null,
+    gmgnMessage: jsonRecord?.message ?? null,
+    gmgnError: jsonRecord?.error ?? null,
+    responsePreview: sanitize(responseText),
+    requestHeaderNames: Object.keys(gmgnOpenApiHeaders()),
+    failingStep,
+    errorCode,
+  };
+}
+
+function logOpenApiFailure({
+  diagnostics,
+  path,
+}: {
+  diagnostics: GmgnOpenApiDiagnostics;
+  path: string;
 }) {
   console.warn("[GMGN OpenAPI]", {
-    baseUsed: url.origin,
-    endpointPath: `${url.pathname}${url.search}`,
-    method: "GET",
+    ...diagnostics,
     path,
-    status,
-    contentType,
-    responsePreview: sanitize(responseText).slice(0, 300),
-    hasGMGNKey: Boolean(process.env.GMGN_API_KEY),
-    requestHeaders: {
-      accept: "application/json, text/plain, */*",
-      "Content-Type": "application/json",
-      hasXApiKey: Boolean(process.env.GMGN_API_KEY),
-    },
-    failingStep,
   });
 }
 
@@ -126,31 +234,56 @@ export async function fetchGmgnOpenApiJson({
     const text = await response.text();
     const contentType = response.headers.get("content-type");
     let payload: unknown;
+    let wasJson = true;
 
     try {
       payload = text.trim() ? JSON.parse(text) : null;
     } catch {
-      logOpenApiFailure({
+      wasJson = false;
+      const diagnostics = diagnosticsFor({
         contentType,
+        errorCode: classifyOpenApiFailure({
+          parsedJson: null,
+          status: response.status,
+          text,
+          wasJson,
+        }),
         failingStep,
-        path,
+        parsedJson: null,
         responseText: text,
         status: response.status,
         url,
       });
-      throw new Error(`${source} returned non-JSON from GMGN OpenAPI.`);
+      logOpenApiFailure({
+        diagnostics,
+        path,
+      });
+      throw new GmgnOpenApiError(`${source} returned non-JSON from GMGN OpenAPI.`, diagnostics);
     }
 
     if (!response.ok) {
-      logOpenApiFailure({
+      const diagnostics = diagnosticsFor({
         contentType,
+        errorCode: classifyOpenApiFailure({
+          parsedJson: payload,
+          status: response.status,
+          text,
+          wasJson,
+        }),
         failingStep,
-        path,
+        parsedJson: payload,
         responseText: text,
         status: response.status,
         url,
       });
-      throw new Error(`${source} failed via GMGN OpenAPI HTTP ${response.status}.`);
+      logOpenApiFailure({
+        diagnostics,
+        path,
+      });
+      throw new GmgnOpenApiError(
+        `${source} failed via GMGN OpenAPI HTTP ${response.status}.`,
+        diagnostics
+      );
     }
 
     if (
@@ -159,18 +292,29 @@ export async function fetchGmgnOpenApiJson({
       "code" in payload &&
       (payload as { code?: unknown }).code !== 0
     ) {
-      logOpenApiFailure({
+      const diagnostics = diagnosticsFor({
         contentType,
+        errorCode: classifyOpenApiFailure({
+          parsedJson: payload,
+          status: response.status,
+          text,
+          wasJson,
+        }),
         failingStep,
-        path,
+        parsedJson: payload,
         responseText: text,
         status: response.status,
         url,
       });
+      logOpenApiFailure({
+        diagnostics,
+        path,
+      });
       const error = (payload as { error?: unknown }).error;
       const message = (payload as { message?: unknown }).message;
-      throw new Error(
-        `${source} failed via GMGN OpenAPI: ${sanitize(String(error || message || "business error"))}`
+      throw new GmgnOpenApiError(
+        `${source} failed via GMGN OpenAPI: ${sanitize(String(error || message || "business error"))}`,
+        diagnostics
       );
     }
 
@@ -180,19 +324,83 @@ export async function fetchGmgnOpenApiJson({
 
     return payload;
   } catch (error) {
-    if (error instanceof Error && !error.message.includes("GMGN OpenAPI")) {
-      logOpenApiFailure({
+    if (error instanceof GmgnOpenApiError) throw error;
+
+    if (error instanceof Error) {
+      const diagnostics = diagnosticsFor({
         contentType: null,
+        errorCode: "GMGN_OPENAPI_NETWORK",
         failingStep,
-        path,
+        parsedJson: null,
         responseText: error.message,
         status: null,
         url,
       });
+      logOpenApiFailure({
+        diagnostics,
+        path,
+      });
+      throw new GmgnOpenApiError(`${source} failed via GMGN OpenAPI network request.`, diagnostics);
     }
 
     throw error;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function probeGmgnOpenApiTokenInfo({
+  address,
+  chain,
+}: {
+  address: string;
+  chain: string;
+}) {
+  const path = "/v1/token/info";
+  const url = buildOpenApiUrl(path, { chain, address });
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: gmgnOpenApiHeaders(),
+    cache: "no-store",
+  });
+  const text = await response.text();
+  const contentType = response.headers.get("content-type");
+  let payload: unknown = null;
+  let wasJson = true;
+
+  try {
+    payload = text.trim() ? JSON.parse(text) : null;
+  } catch {
+    wasJson = false;
+  }
+
+  const hasBusinessError =
+    payload &&
+    typeof payload === "object" &&
+    "code" in payload &&
+    (payload as { code?: unknown }).code !== 0;
+  const errorCode =
+    !response.ok || hasBusinessError || !wasJson
+      ? classifyOpenApiFailure({
+          parsedJson: payload,
+          status: response.status,
+          text,
+          wasJson,
+        })
+      : null;
+
+  const diagnostics = diagnosticsFor({
+    contentType,
+    errorCode,
+    failingStep: "provider-test-gmgn-openapi",
+    parsedJson: payload,
+    responseText: text,
+    status: response.status,
+    url,
+  });
+
+  return {
+    ...diagnostics,
+    ok: response.ok && !hasBusinessError && wasJson,
+  };
 }
