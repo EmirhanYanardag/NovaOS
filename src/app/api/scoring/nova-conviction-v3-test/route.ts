@@ -151,6 +151,33 @@ function gmgnRateLimitResponse({
   requestRunId: string | null;
   stage: string;
 }) {
+  const openApiDiagnostics = error instanceof GmgnOpenApiError ? error.diagnostics : null;
+  console.error("NOVA_INTERNAL_429", {
+    reason: openApiDiagnostics?.errorCode ?? "rate-limit-classifier",
+    stage,
+    failingStep: openApiDiagnostics?.failingStep ?? stage,
+    errorCode: openApiDiagnostics?.errorCode ?? "GMGN_RATE_LIMIT",
+    chain,
+    address,
+    analysisMode,
+    runId: requestRunId,
+    endpointPath: openApiDiagnostics?.endpointPath ?? null,
+    status: openApiDiagnostics?.status ?? null,
+    gmgnCode: openApiDiagnostics?.gmgnCode ?? null,
+    gmgnMessage: openApiDiagnostics?.gmgnMessage ?? null,
+  });
+  productionLog("SCAN_FAIL", {
+    runId: requestRunId,
+    failingStep: openApiDiagnostics?.failingStep ?? stage,
+    errorCode: openApiDiagnostics?.errorCode ?? "GMGN_RATE_LIMIT",
+    stage,
+    chain,
+    address,
+    analysisMode,
+    endpointPath: openApiDiagnostics?.endpointPath ?? null,
+    status: openApiDiagnostics?.status ?? null,
+  });
+
   console.error("[Nova V3] GMGN rate limit", {
     stage,
     chain,
@@ -213,6 +240,15 @@ function holderAlphaExecutionErrorResponse({
   };
 
   productionLog("Holder Alpha execution failed", debug);
+  productionLog("SCAN_FAIL", {
+    runId: requestRunId,
+    failingStep: "holder-alpha-execution",
+    errorCode: "HOLDER_ALPHA_SOURCE_UNAVAILABLE",
+    runtimeMs,
+    chain,
+    address,
+    analysisMode,
+  });
 
   return NextResponse.json(
     {
@@ -258,6 +294,14 @@ function gmgnTopHoldersNonJsonResponse({
     requestHeaders: diagnostic.requestHeaders,
     responseClassification: diagnostic.responseClassification,
     runId: requestRunId,
+  });
+  productionLog("SCAN_FAIL", {
+    runId: requestRunId,
+    failingStep: diagnostic.failingStep,
+    errorCode: "GMGN_TOP_HOLDERS_NON_JSON",
+    runtimeMs,
+    endpointPath: diagnostic.endpointPath,
+    status: diagnostic.status,
   });
 
   return NextResponse.json(
@@ -506,6 +550,15 @@ export async function GET(request: Request) {
   let riskStats: GmgnRiskStats | null = null;
   let riskPressure: RiskPressureResultV1 | null = null;
   const structuralSafety = null;
+
+  productionLog("SCAN_START", {
+    runId,
+    mode: analysisMode,
+    chain,
+    address: normalizedAddress,
+    failingStep: "scan-start",
+    runtimeMs: Date.now() - startedAt,
+  });
 
   productionLog("Starting Holder Alpha", {
     chain,

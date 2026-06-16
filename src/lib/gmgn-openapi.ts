@@ -209,6 +209,28 @@ function logOpenApiFailure({
   });
 }
 
+function logOpenApi429({
+  response,
+  text,
+  url,
+  failingStep,
+}: {
+  response: Response;
+  text: string;
+  url: URL;
+  failingStep: string;
+}) {
+  if (response.status !== 429) return;
+
+  console.warn("GMGN_OPENAPI_429", {
+    endpointPath: `${url.pathname}${url.search}`,
+    status: response.status,
+    retryAfter: response.headers.get("retry-after"),
+    responsePreview: sanitize(text),
+    failingStep,
+  });
+}
+
 export async function fetchGmgnOpenApiJson({
   failingStep,
   path,
@@ -240,6 +262,12 @@ export async function fetchGmgnOpenApiJson({
       payload = text.trim() ? JSON.parse(text) : null;
     } catch {
       wasJson = false;
+      logOpenApi429({
+        response,
+        text,
+        url,
+        failingStep,
+      });
       const diagnostics = diagnosticsFor({
         contentType,
         errorCode: classifyOpenApiFailure({
@@ -262,6 +290,12 @@ export async function fetchGmgnOpenApiJson({
     }
 
     if (!response.ok) {
+      logOpenApi429({
+        response,
+        text,
+        url,
+        failingStep,
+      });
       const diagnostics = diagnosticsFor({
         contentType,
         errorCode: classifyOpenApiFailure({
