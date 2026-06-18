@@ -1,8 +1,9 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Globe, Send } from "lucide-react";
+import { ArrowLeft, Globe, Send } from "lucide-react";
 import Image from "next/image";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   calculateConvictionFormulaV2,
@@ -56,6 +57,7 @@ import {
   type InsiderRiskV2Result,
 } from "../../lib/insider-math";
 import HolderBubbleMap from "@/components/HolderBubbleMap";
+import ShaderLandingBackground from "@/components/ShaderLandingBackground";
 import NovaChart from "../components/NovaChart";
 
 type AnalysisStage = {
@@ -3074,7 +3076,12 @@ export function TerminalExperience({
   }
 
   return (
-    <main className="nova-terminal-root relative h-screen overflow-hidden bg-[var(--nova-bg)] text-[color:var(--nova-text)]">
+    <main
+      className={`nova-terminal-root relative h-screen overflow-hidden text-[color:var(--nova-text)] ${
+        hasTokenSelection && !terminalRevealed ? "bg-[var(--nova-bg)]" : "bg-transparent"
+      }`}
+    >
+      {(!hasTokenSelection || terminalRevealed) && <ShaderLandingBackground />}
       {!hasTokenSelection && (
         <TerminalIdleState
           disabledReason={scanDisabledReason}
@@ -3117,7 +3124,7 @@ export function TerminalExperience({
       )}
 
       {hasTokenSelection && terminalRevealed && (
-      <div className="nova-terminal-shell relative z-[3] flex h-screen bg-[var(--nova-bg)]">
+      <div className="nova-terminal-shell relative z-10 flex h-screen bg-transparent">
         <div className="hidden lg:block">
           <Sidebar
             activeSection={activeSection}
@@ -3128,6 +3135,13 @@ export function TerminalExperience({
         <section className="nova-terminal-main relative h-screen flex-1 overflow-y-auto overflow-x-hidden p-4 pb-8 lg:p-5 lg:pb-8">
           <Header
             activeSection={activeSection}
+            hideTitle={
+              activeSection === "Overview" ||
+              activeSection === "Conviction Engine" ||
+              activeSection === "AI vs Human" ||
+              activeSection === "Wallet Flows" ||
+              activeSection === "Insider Scan"
+            }
             onNewScan={runNewIntelligenceScan}
           />
 
@@ -3137,8 +3151,8 @@ export function TerminalExperience({
           />
 
           {activeSection === "Overview" && (
-            <>
-              <section className="space-y-4">
+            <div className="nova-overview-surface">
+              <section className="nova-overview-first-screen space-y-4">
                 <div>
                   <TokenHeader
                     mantleContext={mantleContext}
@@ -3151,8 +3165,8 @@ export function TerminalExperience({
                   />
                 </div>
 
-                <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,65fr)_minmax(360px,35fr)]">
-                  <div className="min-w-0">
+                <div className="nova-overview-main-grid grid items-stretch gap-5 xl:grid-cols-[minmax(0,1fr)_580px]">
+                  <div className="nova-overview-chart-fill min-w-0">
                     <NovaChart
                       token={token}
                       price={tokenData.price}
@@ -3165,7 +3179,7 @@ export function TerminalExperience({
                     />
                   </div>
 
-                  <div className="min-w-0">
+                  <div className="nova-overview-score-grid-wrap min-w-0">
                     <OverviewExecutiveSummary
                       conviction={explainableConviction}
                       formulaV3={convictionFormulaV3}
@@ -3182,13 +3196,6 @@ export function TerminalExperience({
                   state={novaConvictionState}
                 />
               </section>
-
-              {novaConvictionState === "loaded" &&
-                (novaConviction?.warnings?.length || 0) > 0 && (
-                  <p className="mt-3 text-xs text-[color:var(--nova-warning)]">
-                    Analysis completed with {novaConviction?.warnings?.length} backend warning(s).
-                  </p>
-                )}
 
               {novaConvictionState === "error" && novaConvictionError && (
                 <p className="mt-3 text-xs text-[color:var(--nova-danger)]">
@@ -3207,11 +3214,11 @@ export function TerminalExperience({
                 loadState={decisionSnapshotState}
                 onCreateSnapshot={createDecisionSnapshot}
               />
-            </>
+            </div>
           )}
 
           {activeSection === "Conviction Engine" && (
-            <section className="space-y-4">
+            <section className="nova-conviction-surface space-y-4">
               <ExplainableConvictionEnginePanel
                 data={explainableConviction}
                 error={explainableConvictionError}
@@ -3469,30 +3476,26 @@ function TerminalIdleState({
 
   return (
     <motion.section
-      initial={{ opacity: 0, y: 18, scale: 0.965, filter: "blur(18px)" }}
-      animate={{
-        opacity: 1,
-        y: 0,
-        scale: query ? 1.002 : 1,
-        filter: query ? "blur(0px) saturate(1.08)" : "blur(0px)",
-      }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
       exit={{ opacity: 0, y: -10, scale: 0.985, filter: "blur(18px)" }}
-      transition={{ duration: 2, ease: [0.16, 1, 0.3, 1] }}
-      className="relative z-[4] flex h-screen items-center justify-center overflow-hidden px-5"
+      transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+      className="nova-landing relative z-10 flex h-screen items-center justify-center overflow-hidden bg-transparent px-5"
+      style={{ background: "transparent" }}
     >
       <div className="relative z-10 flex w-full max-w-[1120px] flex-col items-center text-center">
         <motion.h1
           aria-label="See Beyond The Chart"
-          className="nova-display nova-terminal-idle-title mx-auto flex max-w-[1120px] flex-nowrap justify-center gap-x-3 whitespace-nowrap text-4xl leading-[1.01] text-[color:var(--nova-text)] [text-shadow:0_0_34px_rgba(157,190,205,0.12),0_12px_42px_rgba(0,0,0,0.56)] sm:gap-x-4 sm:text-6xl lg:text-[4.6rem] xl:text-[5rem]"
+          className="nova-display nova-terminal-idle-title mx-auto flex max-w-[1120px] flex-nowrap justify-center gap-x-3 whitespace-nowrap text-[3.05rem] font-black leading-[0.94] tracking-[-0.032em] text-[#E3E0D7] sm:gap-x-4 sm:text-[4.85rem] lg:text-[5.95rem]"
         >
           {titleWords.map((word, index) => (
             <motion.span
               key={word}
-              initial={{ opacity: 0, y: 18, scale: 0.965, filter: "blur(18px)" }}
+              initial={{ opacity: 0, y: 42, scale: 0.96, filter: "blur(18px)" }}
               animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
               transition={{
-                duration: 2,
-                delay: index * 0.32,
+                duration: 1.05,
+                delay: index * 0.14,
                 ease: [0.16, 1, 0.3, 1],
               }}
               className={`inline-block ${word === "Chart" ? "gradient-word" : ""}`}
@@ -3503,18 +3506,18 @@ function TerminalIdleState({
         </motion.h1>
 
         <motion.p
-          initial={{ opacity: 0, y: 10, filter: "blur(8px)" }}
+          initial={{ opacity: 0, y: 18, filter: "blur(10px)" }}
           animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-          transition={{ duration: 1.15, delay: 1.18, ease: [0.16, 1, 0.3, 1] }}
-          className="entry-subtitle-glow relative mt-7 text-[10px] font-light uppercase tracking-[0.42em] sm:text-xs"
+          transition={{ duration: 0.85, delay: 1.22, ease: [0.16, 1, 0.3, 1] }}
+          className="nova-tech relative mt-7 text-[10px] font-medium uppercase tracking-[0.28em] text-white/45 sm:text-xs"
         >
           AI-NATIVE CONVICTION INTELLIGENCE
         </motion.p>
 
         <motion.div
-          initial={{ opacity: 0, y: 12, filter: "blur(10px)" }}
-          animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-          transition={{ duration: 1.1, delay: 1.68, ease: [0.16, 1, 0.3, 1] }}
+          initial={{ opacity: 0, y: 26, scale: 0.98, filter: "blur(14px)" }}
+          animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
+          transition={{ duration: 0.95, delay: 1.62, ease: [0.16, 1, 0.3, 1] }}
           className="mt-12 w-full"
         >
           <TerminalSearchBox
@@ -3807,13 +3810,13 @@ function Sidebar({
             onClick={() => onSelectSection(item)}
             className={`group flex w-full items-center rounded-[1.15rem] px-4 py-3 text-left transition duration-300 ${
               isActive
-                ? "border border-[color:var(--nova-border-strong)] bg-[rgba(178,190,181,0.08)] text-[color:var(--nova-accent-soft)] shadow-[inset_0_1px_0_rgba(229,228,226,0.08),0_0_30px_rgba(178,190,181,0.06)]"
-                : "hover:scale-[1.01] hover:bg-[rgba(83,104,120,0.36)] hover:text-[color:var(--nova-text)]"
+                ? "border border-[rgba(181,176,159,0.28)] bg-[rgba(181,176,159,0.12)] text-[#E3E0D7] shadow-[inset_0_1px_0_rgba(229,228,226,0.08)]"
+                : "hover:scale-[1.01] hover:bg-[rgba(181,176,159,0.08)] hover:text-[#E3E0D7]"
             }`}
           >
             <span
               className={`mr-3 h-1.5 w-1.5 rounded-full ${
-                isActive ? "bg-[var(--nova-accent)]" : "bg-[rgba(83,104,120,0.18)]"
+                isActive ? "bg-[#B5B09F]" : "bg-[rgba(181,176,159,0.18)]"
               }`}
             />
             {item}
@@ -3821,45 +3824,50 @@ function Sidebar({
         )})}
       </nav>
 
-      <div className="nova-card-inner mt-7 rounded-[1.6rem] p-4">
-        <p className="text-xs uppercase tracking-[0.25em] text-[color:var(--nova-accent-soft)]">
-          System Status
-        </p>
-        <p className="mt-3 text-sm text-[color:var(--nova-text-soft)]">Conviction Engine active</p>
-        <p className="mt-1 text-xs text-[color:var(--nova-text-muted)]">
-          Monitoring Ethereum, Base, Mantle and Solana.
-        </p>
-      </div>
     </aside>
   );
 }
 
 function Header({
   activeSection,
+  hideTitle = false,
   onNewScan,
 }: {
   activeSection: TerminalSection;
+  hideTitle?: boolean;
   onNewScan: () => void;
 }) {
   return (
-    <header className="mb-4 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-      <div>
-        <p className="nova-tech text-xs text-[color:var(--nova-accent-soft)]">
-          Intelligence Terminal
-        </p>
-        <h1 className="nova-display mt-1 text-3xl">
-          <DisplayTitleText title={activeSection} />
-        </h1>
-      </div>
+    <header className={`mb-4 flex flex-col gap-4 xl:flex-row xl:items-center ${hideTitle ? "xl:justify-end" : "xl:justify-between"}`}>
+      {!hideTitle && (
+        <div>
+          <p className="nova-tech text-xs text-[color:var(--nova-accent-soft)]">
+            Intelligence Terminal
+          </p>
+          <h1 className="nova-display mt-1 text-3xl">
+            <DisplayTitleText title={activeSection} />
+          </h1>
+        </div>
+      )}
 
-      <button
-        type="button"
-        onClick={onNewScan}
-        className="nova-card-inner group relative inline-flex w-full items-center justify-center overflow-hidden rounded-full px-5 py-3 text-xs font-medium uppercase tracking-[0.24em] text-[color:var(--nova-accent-soft)] transition duration-300 hover:scale-[1.01] hover:border-[color:var(--nova-border-strong)] hover:text-[color:var(--nova-text)] xl:w-auto"
-      >
-        <span className="absolute inset-y-1 left-0 w-12 -translate-x-full bg-gradient-to-r from-transparent via-[rgba(229,228,226,0.16)] to-transparent blur-sm transition duration-700 group-hover:translate-x-[18rem]" />
-        <span className="relative">New Intelligence Scan</span>
-      </button>
+      <div className="flex w-full items-center justify-end gap-3 xl:w-auto">
+        <Link
+          href="/"
+          aria-label="Back to landing page"
+          className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full border border-white/[0.12] bg-[#08080A]/[0.72] text-[#E3E0D7] shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_12px_34px_rgba(0,0,0,0.28)] backdrop-blur-[18px] transition duration-300 ease-out hover:-translate-y-px hover:border-[#B5B09F]/40 hover:bg-[#B5B09F]/[0.06] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_0_24px_rgba(181,176,159,0.12)]"
+        >
+          <ArrowLeft size={17} strokeWidth={1.8} />
+        </Link>
+
+        <button
+          type="button"
+          onClick={onNewScan}
+          className="nova-card-inner group relative inline-flex w-full items-center justify-center overflow-hidden rounded-full px-5 py-3 text-xs font-medium uppercase tracking-[0.24em] text-[color:var(--nova-accent-soft)] transition duration-300 hover:scale-[1.01] hover:border-[rgba(181,176,159,0.18)] hover:bg-[rgba(181,176,159,0.08)] hover:text-[#E3E0D7] xl:w-auto"
+        >
+          <span className="absolute inset-y-1 left-0 w-12 -translate-x-full bg-gradient-to-r from-transparent via-[rgba(229,228,226,0.16)] to-transparent blur-sm transition duration-700 group-hover:translate-x-[18rem]" />
+          <span className="relative">Analyze New Token</span>
+        </button>
+      </div>
     </header>
   );
 }
@@ -3966,12 +3974,12 @@ function TerminalSearchBox({
         onChange={(event) => {
           if (!inputDisabled) setQuery(event.target.value);
         }}
-        className={`relative z-10 w-full rounded-[2rem] border text-[color:var(--nova-text)] outline-none backdrop-blur-[30px] transition duration-[420ms] placeholder:text-transparent disabled:cursor-text disabled:opacity-100 ${
+        className={`relative z-10 w-full border text-[color:var(--nova-text)] outline-none transition duration-[500ms] placeholder:text-transparent disabled:cursor-text disabled:opacity-100 ${
           inputDisabled
-            ? "border-[color:var(--nova-border)] nova-card-inner px-8 py-5 text-base shadow-[inset_0_0_34px_rgba(0,0,0,0.34)]"
+            ? "h-[68px] rounded-full border-white/[0.12] bg-white/[0.035] px-8 text-base text-[#E3E0D7] shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_18px_60px_rgba(0,0,0,0.32)] backdrop-blur-[28px]"
             : idle
-            ? "border-[color:var(--nova-border)] nova-card-inner px-8 py-5 text-base shadow-[inset_0_0_34px_rgba(0,0,0,0.34)] hover:border-[color:var(--nova-border-strong)] hover:bg-[rgba(10,10,10,0.68)] focus:border-[color:var(--nova-border-strong)] focus:bg-[rgba(10,10,10,0.72)] focus:shadow-[inset_0_0_32px_rgba(0,0,0,0.28),0_0_28px_rgba(178,190,181,0.06)]"
-            : "border-[color:var(--nova-border)] nova-card-inner px-6 py-3.5 text-sm hover:border-[color:var(--nova-border-strong)] focus:border-[color:var(--nova-border-strong)] focus:bg-[rgba(10,10,10,0.72)]"
+            ? "h-[68px] rounded-full border-white/[0.12] bg-white/[0.035] px-8 text-base text-[#E3E0D7] shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_18px_60px_rgba(0,0,0,0.32)] backdrop-blur-[28px] hover:border-[#B5B09F]/35 hover:bg-white/[0.05] focus:border-[#B5B09F]/35 focus:bg-white/[0.055] focus:shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_32px_rgba(181,176,159,0.12),0_18px_60px_rgba(0,0,0,0.34)]"
+            : "rounded-[2rem] border-[color:var(--nova-border)] nova-card-inner px-6 py-3.5 text-sm backdrop-blur-[30px] hover:border-[color:var(--nova-border-strong)] focus:border-[color:var(--nova-border-strong)] focus:bg-[rgba(10,10,10,0.72)]"
         }`}
       />
 
@@ -3979,9 +3987,9 @@ function TerminalSearchBox({
         <div
           className={`pointer-events-none absolute left-8 top-1/2 z-20 flex -translate-y-1/2 font-light transition duration-500 group-focus-within:text-[color:var(--nova-text-soft)] ${
             inputDisabled
-              ? "text-base text-[color:var(--nova-text-muted)]"
+              ? "text-base text-white/40"
               : idle
-              ? "text-base text-[color:var(--nova-text-muted)]"
+              ? "text-base text-white/40"
               : "text-sm text-[color:var(--nova-text-muted)]"
           }`}
         >
@@ -3991,7 +3999,7 @@ function TerminalSearchBox({
       </div>
 
       {query && (
-        <div className="nova-card-strong relative z-[60] mt-4 max-h-[520px] w-full overflow-y-auto rounded-[1.7rem] p-2">
+        <div className="nova-token-results-scroll nova-card-strong relative z-[60] mt-4 max-h-[520px] w-full overflow-y-auto rounded-[1.7rem] p-2">
           {isScanning && (
             <div className="px-4 py-5 text-sm text-[color:var(--nova-text-muted)]">
               Searching token pairs...
@@ -4009,7 +4017,7 @@ function TerminalSearchBox({
               key={`${result.chain}-${result.dex}-${result.pairAddress}`}
               disabled={isScanLocked || Boolean(disabledReason)}
               onClick={() => selectToken(result)}
-              className="flex w-full items-center justify-between gap-4 rounded-2xl px-4 py-3 text-left transition duration-300 hover:bg-[rgba(83,104,120,0.34)] hover:text-[color:var(--nova-text)] focus:outline-none focus:ring-1 focus:ring-[rgba(178,190,181,0.16)] disabled:cursor-not-allowed disabled:opacity-45"
+              className="group/result flex w-full items-center justify-between gap-4 rounded-2xl border border-transparent px-4 py-3 text-left transition duration-300 ease-out hover:border-[rgba(181,176,159,0.18)] hover:bg-[rgba(181,176,159,0.08)] hover:text-[#E3E0D7] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] focus:border-[rgba(181,176,159,0.28)] focus:bg-[rgba(181,176,159,0.12)] focus:outline-none focus:ring-1 focus:ring-[rgba(181,176,159,0.18)] disabled:cursor-not-allowed disabled:opacity-45"
             >
               <div className="flex min-w-0 items-center gap-3">
                 {result.imageUrl ? (
@@ -4028,9 +4036,9 @@ function TerminalSearchBox({
                 )}
 
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-[color:var(--nova-text)]">
+                  <p className="truncate text-sm font-medium text-[color:var(--nova-text)] transition-colors duration-300 ease-out group-hover/result:text-[#E3E0D7]">
                     {result.symbol}{" "}
-                    <span className="text-[color:var(--nova-text-muted)]">{result.name}</span>
+                    <span className="text-[color:var(--nova-text-muted)] transition-colors duration-300 ease-out group-hover/result:text-[#E3E0D7]/70">{result.name}</span>
                   </p>
                   <p className="mt-1 truncate text-xs text-[color:var(--nova-text-muted)]">
                     {chainLabel(result.chain)} / {result.dex} /{" "}
@@ -4057,35 +4065,64 @@ function TerminalSearchBox({
         </div>
       )}
 
-      <div className="mt-6 flex flex-wrap justify-center gap-3">
+      <motion.div
+        initial={idle ? "hidden" : false}
+        animate="visible"
+        variants={{
+          hidden: {},
+          visible: {
+            transition: {
+              delayChildren: idle ? 1.95 : 0,
+              staggerChildren: 0.12,
+            },
+          },
+        }}
+        className="mt-6 flex flex-wrap justify-center gap-3"
+      >
         {modes.map((mode) => {
           const isActive = analysisMode === mode.value;
 
           return (
-            <button
+            <motion.button
               key={mode.value}
               type="button"
               onClick={() => {
                 if (!isScanLocked) selectAnalysisMode(mode.value);
               }}
               disabled={isScanLocked}
-              className={`group/mode relative h-12 min-w-[132px] overflow-hidden rounded-full border px-8 text-center backdrop-blur-[34px] transition duration-300 sm:h-[3.25rem] sm:min-w-[148px] sm:px-10 ${
-                isActive
+              variants={{
+                hidden: { opacity: 0, y: 20, filter: "blur(10px)" },
+                visible: { opacity: 1, y: 0, filter: "blur(0px)" },
+              }}
+              transition={{ duration: 0.75, ease: [0.16, 1, 0.3, 1] }}
+              className={`group/mode relative h-12 min-w-[132px] overflow-hidden rounded-full border px-8 text-center text-xs font-bold uppercase tracking-[0.08em] backdrop-blur-[28px] transition-all duration-500 ease-out sm:h-[3.25rem] sm:min-w-[148px] sm:px-10 ${
+                idle
+                  ? isActive
+                    ? "border-[#B5B09F]/45 bg-[#B5B09F]/[0.06] text-[#E3E0D7] shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_12px_40px_rgba(0,0,0,0.28),0_0_24px_rgba(181,176,159,0.08)]"
+                    : "border-white/15 bg-white/[0.045] text-[#E3E0D7] shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_12px_40px_rgba(0,0,0,0.24)] hover:-translate-y-0.5 hover:scale-[1.02] hover:border-[#B5B09F]/40 hover:bg-[#B5B09F]/[0.045] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_0_24px_rgba(181,176,159,0.14),0_0_60px_rgba(181,176,159,0.06)]"
+                  : isActive
                   ? "border-[color:var(--nova-border-strong)] bg-[rgba(178,190,181,0.10)] text-[color:var(--nova-text)] shadow-[0_0_26px_rgba(178,190,181,0.07),inset_0_-18px_34px_rgba(0,0,0,0.3)]"
                   : "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-soft)] hover:scale-[1.015] hover:border-[color:var(--nova-border-strong)] hover:bg-[rgba(83,104,120,0.34)] hover:text-[color:var(--nova-text)] hover:shadow-[0_0_22px_rgba(178,190,181,0.045)]"
               } disabled:opacity-50`}
               title={mode.detail}
             >
-              <span className="pointer-events-none absolute -right-10 -top-10 h-24 w-24 rounded-full bg-[rgba(178,190,181,0.04)] blur-2xl opacity-0 transition duration-300 group-hover/mode:opacity-100" />
-              <span className="relative flex h-full items-center justify-center text-[11px] font-semibold uppercase tracking-[0.26em]">
+              {!idle && (
+                <span className="pointer-events-none absolute -right-10 -top-10 h-24 w-24 rounded-full bg-[rgba(178,190,181,0.04)] blur-2xl opacity-0 transition duration-300 group-hover/mode:opacity-100" />
+              )}
+              <span className="relative flex h-full items-center justify-center">
                 {mode.label}
               </span>
-            </button>
+            </motion.button>
           );
         })}
-      </div>
+      </motion.div>
 
-      <div className="mt-5 min-h-6 text-center">
+      <motion.div
+        initial={idle ? { opacity: 0, y: 12, filter: "blur(8px)" } : false}
+        animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+        transition={{ duration: 0.75, delay: idle ? 2.35 : 0, ease: [0.16, 1, 0.3, 1] }}
+        className="mt-5 min-h-6 text-center"
+      >
         {disabledReason ? (
           <p className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">
             {disabledReason}
@@ -4134,26 +4171,26 @@ function TerminalSearchBox({
                     opacity: [0.5, 0.9, 0.5],
                     filter: ["blur(1px)", "blur(0px)", "blur(0px)"],
                     textShadow: [
-                      "0 0 0 rgba(181, 231, 238, 0)",
-                      "0 0 20px rgba(181, 231, 238, 0.22)",
-                      "0 0 0 rgba(181, 231, 238, 0)",
+                      "0 0 0 rgba(181, 176, 159, 0)",
+                      "0 0 20px rgba(181, 176, 159, 0.18)",
+                      "0 0 0 rgba(181, 176, 159, 0)",
                     ],
                   }
                 : { opacity: 1, filter: "blur(0px)" }
             }
             transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
             className={`text-[10px] font-light uppercase tracking-[0.28em] ${
-              depthHintPulse ? "text-[color:var(--nova-text)]" : "text-[color:var(--nova-text-muted)]"
+              depthHintPulse ? "text-[#E3E0D7]" : "text-white/40"
             }`}
           >
             {modePrompt}
           </motion.p>
         )}
-      </div>
+      </motion.div>
 
       {false && query && (
         <div
-          className={`absolute right-0 z-50 max-h-[520px] w-full overflow-y-auto rounded-[1.5rem] nova-card-inner p-2 shadow-[0_30px_100px_rgba(0,0,0,0.65)] backdrop-blur-2xl ${
+          className={`nova-token-results-scroll absolute right-0 z-50 max-h-[520px] w-full overflow-y-auto rounded-[1.5rem] nova-card-inner p-2 shadow-[0_30px_100px_rgba(0,0,0,0.65)] backdrop-blur-2xl ${
             idle ? "top-[4.8rem]" : "top-14"
           }`}
         >
@@ -4174,7 +4211,7 @@ function TerminalSearchBox({
               key={`${result.chain}-${result.dex}-${result.pairAddress}`}
               disabled={isScanLocked || Boolean(disabledReason)}
               onClick={() => selectToken(result)}
-              className="flex w-full items-center justify-between gap-4 rounded-2xl px-4 py-3 text-left transition duration-300 hover:nova-card-inner hover:text-[color:var(--nova-text)] focus:outline-none focus:ring-1 focus:ring-[rgba(178,190,181,0.14)] disabled:cursor-not-allowed disabled:opacity-45"
+              className="group/result flex w-full items-center justify-between gap-4 rounded-2xl border border-transparent px-4 py-3 text-left transition duration-300 ease-out hover:border-[rgba(181,176,159,0.18)] hover:bg-[rgba(181,176,159,0.08)] hover:text-[#E3E0D7] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] focus:border-[rgba(181,176,159,0.28)] focus:bg-[rgba(181,176,159,0.12)] focus:outline-none focus:ring-1 focus:ring-[rgba(181,176,159,0.18)] disabled:cursor-not-allowed disabled:opacity-45"
             >
               <div className="flex min-w-0 items-center gap-3">
                 {result.imageUrl ? (
@@ -4193,9 +4230,9 @@ function TerminalSearchBox({
                 )}
 
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-[color:var(--nova-text)]">
+                  <p className="truncate text-sm font-medium text-[color:var(--nova-text)] transition-colors duration-300 ease-out group-hover/result:text-[#E3E0D7]">
                     {result.symbol}{" "}
-                    <span className="text-[color:var(--nova-text-muted)]">{result.name}</span>
+                    <span className="text-[color:var(--nova-text-muted)] transition-colors duration-300 ease-out group-hover/result:text-[#E3E0D7]/70">{result.name}</span>
                   </p>
                   <p className="mt-1 truncate text-xs text-[color:var(--nova-text-muted)]">
                     {chainLabel(result.chain)} / {result.dex} /{" "}
@@ -4541,7 +4578,7 @@ function TokenHeader({
         {marketCards.map((card) => (
           <div
             key={card.label}
-            className="rounded-2xl nova-card-inner p-3"
+            className="rounded-2xl border border-white/10 bg-[#050506]/[0.92] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-[8px]"
           >
             <p className="text-xs text-[color:var(--nova-text-muted)]">{card.label}</p>
             <p className="mt-2 truncate text-lg font-semibold">{card.value}</p>
@@ -6712,8 +6749,8 @@ function OverviewExecutiveSummary({
   const scoreItems = [...primaryItems, ...secondaryItems];
 
   return (
-    <div className="nova-overview-summary flex min-h-[640px] flex-col">
-      <div className="grid flex-1 gap-3 sm:grid-cols-2 xl:grid-cols-1">
+    <div className="nova-overview-summary flex h-full min-h-0 flex-col">
+      <div className="grid h-full min-h-0 grid-cols-2 grid-rows-3 gap-3">
         {scoreItems.map((item) => (
           <OverviewExecutiveScoreCard
             key={item.label}
@@ -6777,7 +6814,7 @@ function OverviewTop10HolderIntelligence({
           rows.map((row) => (
             <div
               key={`${row.rank ?? "unranked"}-${row.wallet}-overview-v3`}
-              className={`grid min-h-[48px] min-w-[820px] grid-cols-[minmax(160px,1.25fr)_72px_120px_90px_150px_100px] items-center gap-3 text-[13px] ${terminalRowClass}`}
+              className={`nova-overview-holder-row grid min-h-[48px] min-w-[820px] grid-cols-[minmax(160px,1.25fr)_72px_120px_90px_150px_100px] items-center gap-3 text-[13px] ${terminalRowClass}`}
             >
               <span
                 className="truncate font-mono text-[color:var(--nova-text-soft)]"
@@ -6856,79 +6893,25 @@ function OverviewExecutiveScoreCard({
   pending: boolean;
   score: number | null;
 }) {
-  const displayScore = pending ? "—" : score === null ? "N/A" : formatScoreValue(score);
-  const scoreClass =
-    inverseTone && score !== null && score >= 65
-      ? "text-[color:var(--nova-warning)]"
-      : "text-[color:var(--nova-text)]";
-  const energy = pending || score === null ? 0.34 : Math.max(0.18, Math.min(1, score / 100));
-  const isPrimaryScore = label === "Nova Conviction" || label === "Risk Score";
-  const coreSizeClass = isPrimaryScore ? "h-[5.9rem] w-[5.9rem]" : "h-[4.75rem] w-[4.75rem]";
+  void inverseTone;
+  const displayScore = pending ? "?" : score === null ? "N/A" : formatScoreValue(score);
 
   return (
     <div
-      className={`nova-overview-score-card relative overflow-hidden rounded-[1.8rem] ${
-        isPrimaryScore
-          ? `min-h-[102px] ${overviewScoreCardSurfaceClass}`
-          : `min-h-[86px] ${overviewScoreCardSurfaceClass}`
-      } px-4 py-3 backdrop-blur-2xl`}
+      className={`nova-overview-score-card relative flex h-full min-h-0 items-center gap-5 overflow-hidden rounded-[1.8rem] ${overviewScoreCardSurfaceClass} px-5 py-4 backdrop-blur-[12px]`}
     >
-      <div
-        className="pointer-events-none absolute inset-0 rounded-[inherit] bg-[radial-gradient(circle_at_20%_50%,rgba(83,104,120,0.14),rgba(94,114,107,0.05)_34%,transparent_68%)]"
-        style={{
-          animation: `novaScoreCoreBreath ${isPrimaryScore ? 6.6 : 7.6}s ease-in-out infinite`,
-          opacity: isPrimaryScore ? 0.34 : 0.22,
-        }}
-      />
-      <div
-        className="pointer-events-none absolute left-[28%] top-1/2 h-[82%] w-[58%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(ellipse_at_center,rgba(83,104,120,0.08),rgba(94,114,107,0.035)_34%,transparent_70%)] blur-2xl"
-        style={{ opacity: isPrimaryScore ? 0.58 : 0.34 }}
-      />
-      <div
-        className={`nova-score-core pointer-events-none absolute left-[4.4rem] top-1/2 rounded-full ${coreSizeClass}`}
-        style={{
-          filter: `drop-shadow(0 0 ${isPrimaryScore ? 22 : 15}px rgba(83,104,120,${0.04 + energy * 0.1}))`,
-          opacity: 0.76 + energy * 0.2,
-          transform: "translate(-50%, -50%)",
-        }}
-      >
-        <div
-          className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_50%_48%,rgba(237,245,242,0.09),rgba(83,104,120,0.13)_18%,rgba(94,114,107,0.16)_38%,rgba(16,18,19,0.34)_58%,transparent_76%)]"
-          style={{ opacity: 0.42 + energy * 0.28 }}
-        />
-        <div className="absolute -inset-[7%] rounded-full border border-[color:rgba(127,144,150,0.08)]" />
-        <div className="absolute inset-0 rounded-full border border-[color:rgba(237,245,242,0.11)]" />
-        <div className="absolute inset-[32%] rounded-full border border-[color:rgba(237,245,242,0.1)] bg-[rgba(10,10,10,0.42)]" />
-        <div
-          className="absolute inset-[13%] animate-[novaScoreSymbolRotate_38s_linear_infinite] rounded-full border border-dashed border-[color:rgba(127,144,150,0.13)]"
-          style={{ opacity: 0.42 + energy * 0.28 }}
-        />
-        <div className="absolute inset-[3%] animate-[novaScoreSymbolRotate_52s_linear_infinite_reverse] rounded-full">
-          <div
-            className="absolute left-1/2 top-0 h-1 w-1 -translate-x-1/2 rounded-full bg-[rgba(237,245,242,0.32)] shadow-[0_0_12px_rgba(127,144,150,0.18)]"
-            style={{ opacity: 0.22 + energy * 0.24 }}
-          />
-          <div className="absolute bottom-4 right-4 h-0.5 w-0.5 rounded-full bg-[rgba(127,144,150,0.24)]" />
-        </div>
-        <div
-          className="absolute inset-[31%] rounded-full bg-[radial-gradient(circle,rgba(237,245,242,0.18),rgba(83,104,120,0.14)_42%,transparent_72%)] blur-[1px]"
-          style={{ opacity: 0.24 + energy * 0.46 }}
-        />
-        <div className="absolute inset-0 flex items-center justify-center">
-          <p className={`relative z-10 font-light tabular-nums tracking-[-0.07em] ${scoreClass} ${isPrimaryScore ? "text-3xl" : "text-2xl"}`}>
-            {displayScore}
-          </p>
-        </div>
-      </div>
-      <div className="nova-score-label relative flex h-full min-h-[inherit] flex-col justify-center pl-[8.6rem] pr-2 text-left">
-        <p className="text-[0.72rem] uppercase tracking-[0.18em] text-[color:var(--nova-text-soft)]">
+      <div className="pointer-events-none absolute inset-x-5 top-0 h-px bg-white/15" />
+      <p className="nova-display shrink-0 bg-gradient-to-b from-[#F0EDE4] to-[#B5B09F] bg-clip-text text-[2.5rem] leading-[0.9] tracking-[-0.03em] text-transparent tabular-nums [text-shadow:0_0_18px_rgba(181,176,159,0.18),0_1px_0_rgba(255,255,255,0.10)] 2xl:text-[2.625rem]">
+        {displayScore}
+      </p>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[0.64rem] font-medium uppercase tracking-[0.18em] text-[rgba(227,224,215,0.72)] [text-shadow:0_0_14px_rgba(181,176,159,0.14)] 2xl:text-[0.69rem]">
           {label}
         </p>
       </div>
     </div>
   );
 }
-
 function overviewWalletFlowScore(summary: TokenFlowSummaryV2) {
   const directionalScore =
     summary.dominantFlow === "Accumulation Dominant"
@@ -7101,14 +7084,6 @@ function NovaConvictionModelView({
       !weakest || pillar.score < weakest.score ? pillar : weakest,
     fallbackPillars[0]
   );
-  const thesis =
-    novaConviction?.thesis.summary ||
-    novaConviction?.thesis.finalInterpretation ||
-    buildNovaConvictionThesis({
-    finalScore,
-      strongestSupport: fallbackStrongest,
-      mainLimiter: fallbackLimiter,
-    });
   const researchSections = buildNovaResearchSections({
     data,
     formulaV3,
@@ -7148,7 +7123,7 @@ function NovaConvictionModelView({
               Nova Conviction Model
             </p>
             <div className="mt-4 flex items-end gap-2">
-              <p className="text-7xl font-light tracking-[-0.065em] text-[color:var(--nova-text)] md:text-8xl">
+              <p className="nova-display nova-conviction-score text-7xl tracking-[-0.045em] text-[color:var(--nova-text)] md:text-8xl">
                 {finalScore}
               </p>
               <p className="pb-3 text-sm text-[color:var(--nova-text-muted)]">/100</p>
@@ -7156,9 +7131,9 @@ function NovaConvictionModelView({
             <p className="mt-3 text-lg font-medium text-[color:var(--nova-text)]">
               {convictionLabel}
             </p>
-            <div className="mt-4 h-2 overflow-hidden rounded-full nova-card-inner">
+            <div className="nova-progress-bar mt-4 h-3 overflow-hidden rounded-full nova-card-inner">
               <div
-                className="h-full rounded-full bg-[rgba(83,104,120,0.70)] shadow-[0_0_18px_rgba(83,104,120,0.3)]"
+                className="h-full rounded-full bg-[linear-gradient(90deg,#b5b09d_0%,#a39e8b_50%,#8f8a78_100%)] shadow-[0_0_10px_rgba(163,158,139,0.10)]"
                 style={{
                   width: `${normalizeScore(finalScore)}%`,
                 }}
@@ -7166,12 +7141,7 @@ function NovaConvictionModelView({
             </div>
           </div>
           <div className="min-w-0 flex-[1.65] xl:px-2">
-            <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">
-              Conviction Summary
-            </p>
-            <p className="mt-3 text-lg leading-relaxed text-[color:var(--nova-text-soft)]">
-              {thesis}
-            </p>
+            <p className="text-lg leading-relaxed text-[color:var(--nova-text-soft)]" aria-hidden="true" />
           </div>
           <div className="flex shrink-0 items-center justify-start xl:w-28 xl:justify-end">
             <TokenAvatar
@@ -7386,13 +7356,13 @@ function buildNovaTerminalPillars(sections: NovaResearchSection[]) {
   return [
     {
       title: "Holder Quality",
-      description: "Holder Alpha V3 quality and ownership composition.",
+      description: "",
       score: holder?.score ?? null,
       rows: holder?.rows ?? [],
     },
     {
       title: "Risk Analysis",
-      description: "Risk pressure, exposure, concentration, and uncertainty.",
+      description: "",
       score: risk?.score ?? null,
       rows:
         risk?.rows.filter((row) =>
@@ -7412,7 +7382,7 @@ function buildNovaTerminalPillars(sections: NovaResearchSection[]) {
     },
     {
       title: "Market Health",
-      description: "Liquidity health, market activity, and usable data coverage.",
+      description: "",
       score: liquidity?.score ?? null,
       rows: [
         ...(liquidity?.rows.filter((row) =>
@@ -7529,22 +7499,19 @@ function NovaConvictionPillarPanel({ section }: { section: NovaResearchSection }
     : null;
 
   return (
-    <section className={`flex min-h-[520px] flex-col rounded-3xl p-4 ${terminalGlassCardClass}`}>
+    <section className={`nova-conviction-pillar-panel flex min-h-[520px] flex-col rounded-3xl p-4 ${terminalGlassCardClass}`}>
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-accent-soft)]">
             {section.title}
           </p>
-          <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-[color:var(--nova-text-muted)]">
-            {section.description}
-          </p>
         </div>
-        <p className="font-mono text-5xl font-semibold tabular-nums tracking-[-0.07em] text-[color:var(--nova-text)]">
+        <p className="nova-display nova-conviction-score shrink-0 text-5xl tabular-nums tracking-[-0.035em] text-[color:var(--nova-text)]">
           {score === null ? "N/A" : score}
         </p>
       </div>
 
-      <MetricBar value={score} className="mt-4 h-2" tone={section.title === "Risk Analysis" ? "risk" : "score"} />
+      <MetricBar value={score} className="nova-conviction-main-bar mt-4 h-3" tone={section.title === "Risk Analysis" ? "risk" : "score"} />
 
       <div className="mt-4 flex-1 space-y-2.5">
         {section.rows.length ? (
@@ -7608,12 +7575,12 @@ function MetricBar({
     : 0;
 
   return (
-    <div className={`overflow-hidden rounded-full bg-[rgba(83,104,120,0.1)] ${className}`}>
+    <div className={`nova-progress-bar overflow-hidden rounded-full bg-[rgba(18,18,18,0.85)] ${className}`}>
       <div
         className={`h-full rounded-full ${
           tone === "risk"
-            ? "bg-[var(--nova-slate)] shadow-[0_0_14px_rgba(83,104,120,0.16)]"
-            : "bg-[rgba(127,144,150,0.72)] shadow-[0_0_14px_rgba(83,104,120,0.18)]"
+            ? "bg-[linear-gradient(90deg,#b5b09d_0%,#a39e8b_50%,#8f8a78_100%)] shadow-[0_0_10px_rgba(163,158,139,0.10)]"
+            : "bg-[linear-gradient(90deg,#b5b09d_0%,#a39e8b_50%,#8f8a78_100%)] shadow-[0_0_10px_rgba(163,158,139,0.10)]"
         }`}
         style={{ width: `${width}%` }}
       />
@@ -7905,26 +7872,6 @@ function novaConvictionLabel(score: number) {
   return "Low Conviction";
 }
 
-function buildNovaConvictionThesis({
-  finalScore,
-  strongestSupport,
-  mainLimiter,
-}: {
-  finalScore: number;
-  strongestSupport: NovaConvictionPillar;
-  mainLimiter: NovaConvictionPillar;
-}) {
-  const pillarSentence = `Strongest pillar: ${strongestSupport.label}. Main limiter: ${mainLimiter.label}.`;
-
-  if (finalScore >= 70) {
-    return `High conviction profile. Holder quality, structural safety, and market integrity align strongly under currently available evidence. ${pillarSentence}`;
-  }
-  if (finalScore >= 40) {
-    return `Moderate conviction profile. Supportive signals are present, but structural or market limitations prevent a clean high-conviction setup. ${pillarSentence}`;
-  }
-  return `Low conviction profile. Structural pressure, weak holder quality, or limited market integrity currently outweigh supportive signals. ${pillarSentence}`;
-}
-
 function pillarInterpretation(label: string, score: number) {
   const band = score >= 70 ? "high" : score >= 40 ? "moderate" : "low";
 
@@ -8010,13 +7957,13 @@ function ConvictionReasonCard({
       : terminalGlassCardClass;
 
   return (
-    <div className={`rounded-2xl p-3 ${toneClass}`}>
+    <div className={`nova-conviction-reason-card rounded-2xl p-3 ${toneClass}`}>
       <p className="text-[0.64rem] uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
         {label}
       </p>
       <div className="mt-2 flex items-baseline justify-between gap-3">
         <p className="text-sm font-medium text-[color:var(--nova-text)]">{title}</p>
-        <p className="font-mono text-xl font-semibold tabular-nums text-[color:var(--nova-text)]">
+        <p className="nova-display nova-conviction-score text-xl tabular-nums text-[color:var(--nova-text)]">
           {formatScoreValue(score)}
         </p>
       </div>
@@ -10249,22 +10196,25 @@ function AIHumanArenaMvpSection({
 
   if (!hasToken) {
     return (
-      <SectionShell
-        title="AI vs Human Arena"
-        description="Challenge NovaOS with daily and weekly conviction calls."
-      >
-        <ArenaEmptyState>
-          Select a token to enter the conviction arena.
-        </ArenaEmptyState>
-      </SectionShell>
+      <div className="nova-ai-arena-surface">
+        <SectionShell
+          title="AI vs Human Arena"
+          description="Challenge NovaOS with daily and weekly conviction calls."
+        >
+          <ArenaEmptyState>
+            Select a token to enter the conviction arena.
+          </ArenaEmptyState>
+        </SectionShell>
+      </div>
     );
   }
 
   return (
-    <SectionShell
-      title="AI vs Human Arena"
-      description="Challenge NovaOS with daily and weekly conviction calls."
-    >
+    <div className="nova-ai-arena-surface">
+      <SectionShell
+        title="AI vs Human Arena"
+        description="Challenge NovaOS with daily and weekly conviction calls."
+      >
       <section className="grid gap-4 xl:grid-cols-[0.78fr_1.22fr]">
         <div className={terminalSurfaceClass + " p-5"}>
           <ArenaSectionTitle title="Arena" />
@@ -10276,7 +10226,7 @@ function AIHumanArenaMvpSection({
                 onClick={() => setSelectedTimeframe(timeframe)}
                 className={`rounded-2xl border px-4 py-3 text-sm font-medium transition ${
                   selectedTimeframe === timeframe
-                    ? "border-[color:var(--nova-border-strong)] bg-[rgba(178,190,181,0.12)] text-[color:var(--nova-text)] shadow-[0_0_24px_rgba(83,104,120,0.12)]"
+                    ? "border-[rgba(163,158,139,0.38)] bg-[rgba(163,158,139,0.16)] text-[#E3E0D7] shadow-[0_0_24px_rgba(163,158,139,0.10)]"
                     : "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-soft)] hover:text-[color:var(--nova-text-soft)]"
                 }`}
               >
@@ -10332,7 +10282,7 @@ function AIHumanArenaMvpSection({
                 className={`rounded-2xl border px-3 py-3 text-sm font-medium transition ${arenaVoteButtonClass(
                   vote,
                   (currentUserEntry?.humanVote || activePendingVote) === vote
-                )} disabled:cursor-not-allowed disabled:border-[color:rgba(83,104,120,0.14)] disabled:nova-card-inner disabled:text-[color:var(--nova-text-muted)]`}
+                )} disabled:cursor-not-allowed disabled:border-[rgba(163,158,139,0.14)] disabled:nova-card-inner disabled:text-[color:var(--nova-text-muted)]`}
               >
                 {vote}
               </button>
@@ -10351,7 +10301,7 @@ function AIHumanArenaMvpSection({
             type="button"
             disabled={!activePendingVote || Boolean(currentUserEntry) || !progress.votingOpen}
             onClick={submitVote}
-            className="mt-4 rounded-full border border-[color:var(--nova-border-strong)] bg-[rgba(178,190,181,0.12)] px-4 py-2 text-xs font-medium text-[color:var(--nova-text)] transition hover:bg-[rgba(83,104,120,0.16)] disabled:cursor-not-allowed disabled:border-[color:rgba(83,104,120,0.14)] disabled:nova-card-inner disabled:text-[color:var(--nova-text-muted)]"
+            className="mt-4 rounded-full border border-[rgba(163,158,139,0.28)] bg-[rgba(163,158,139,0.10)] px-4 py-2 text-xs font-medium text-[#E3E0D7] transition hover:border-[rgba(163,158,139,0.28)] hover:bg-[rgba(163,158,139,0.10)] disabled:cursor-not-allowed disabled:border-[rgba(163,158,139,0.14)] disabled:nova-card-inner disabled:text-[color:var(--nova-text-muted)]"
           >
             Submit Vote
           </button>
@@ -10430,7 +10380,8 @@ function AIHumanArenaMvpSection({
           </div>
         </div>
       </section>
-    </SectionShell>
+      </SectionShell>
+    </div>
   );
 }
 
@@ -10609,18 +10560,18 @@ function buildArenaVoteDistribution(entries: ArenaVoteEntry[]) {
 }
 
 function arenaVoteButtonClass(vote: ArenaVote, active: boolean) {
-  if (!active) return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-soft)] hover:text-[color:var(--nova-text)]";
-  return `${arenaPublishedSurfaceClass(vote)} shadow-[0_0_26px_rgba(83,104,120,0.12)]`;
+  if (!active) return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-soft)] hover:border-[rgba(163,158,139,0.28)] hover:bg-[rgba(163,158,139,0.10)] hover:text-[#E3E0D7]";
+  return `${arenaPublishedSurfaceClass(vote)} shadow-[0_0_26px_rgba(163,158,139,0.10)]`;
 }
 
 function arenaPublishedSurfaceClass(stance: NovaArenaStance | ArenaVote) {
   if (stance === "Bullish") {
-    return "border-[color:var(--nova-border-strong)] bg-[rgba(83,104,120,0.1)] text-[color:var(--nova-text)]";
+    return "border-[rgba(163,158,139,0.38)] bg-[rgba(163,158,139,0.16)] text-[#E3E0D7]";
   }
   if (stance === "Bearish") {
-      return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-warning)]";
+      return "border-[rgba(163,158,139,0.38)] bg-[rgba(163,158,139,0.16)] text-[#E3E0D7]";
   }
-  return "border-[color:var(--nova-border)] bg-[rgba(94,114,107,0.1)] text-[color:var(--nova-accent-soft)]";
+  return "border-[rgba(163,158,139,0.38)] bg-[rgba(163,158,139,0.16)] text-[#E3E0D7]";
 }
 
 function ArenaEmptyState({
@@ -10641,7 +10592,7 @@ function ArenaEmptyState({
 
 function ArenaSectionTitle({ title }: { title: string }) {
   return (
-    <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-text-muted)]">
+    <p className="text-xs uppercase tracking-[0.18em] text-[rgba(181,176,157,0.68)]">
       {title}
     </p>
   );
@@ -10658,7 +10609,7 @@ function ArenaFact({ label, value }: { label: string; value: string }) {
 
 function ArenaChip({ children }: { children: React.ReactNode }) {
   return (
-    <span className="rounded-full nova-card-inner px-3 py-1 text-xs font-medium text-[color:var(--nova-text-soft)]">
+    <span className="rounded-full nova-card-inner px-3 py-1 text-xs font-medium text-[#a39e8b]">
       {children}
     </span>
   );
@@ -10682,9 +10633,9 @@ function ArenaCountdownCard({
       <p className="mt-4 text-3xl font-semibold tracking-[-0.05em] text-[color:var(--nova-text)]">
         {timeRemainingLabel}
       </p>
-      <div className="mt-4 h-2 overflow-hidden rounded-full nova-card-inner">
+      <div className="nova-arena-progress-track mt-4 h-2 overflow-hidden rounded-full nova-card-inner">
         <div
-          className="h-full rounded-full bg-[rgba(83,104,120,0.65)] shadow-[0_0_18px_rgba(83,104,120,0.24)] transition-all"
+          className="h-full rounded-full bg-[linear-gradient(90deg,#b5b09d_0%,#a39e8b_50%,#8f8a78_100%)] shadow-[0_0_10px_rgba(163,158,139,0.10)] transition-all"
           style={{ width: `${progressPercent}%` }}
         />
       </div>
@@ -10711,7 +10662,7 @@ function ArenaDistributionBar({
         <span className="font-medium text-[color:var(--nova-text-soft)]">{label}</span>
         <span className="font-mono text-[color:var(--nova-text-soft)]">{percent}%</span>
       </div>
-      <div className="mt-2 h-2 overflow-hidden rounded-full nova-card-inner">
+      <div className="nova-arena-progress-track mt-2 h-2 overflow-hidden rounded-full nova-card-inner">
         <div
           className={`h-full rounded-full transition-all ${arenaDistributionFillClass(tone)}`}
           style={{ width: `${percent}%` }}
@@ -10723,12 +10674,12 @@ function ArenaDistributionBar({
 
 function arenaDistributionFillClass(vote: ArenaVote) {
   if (vote === "Bullish") {
-    return "bg-[rgba(83,104,120,0.70)] shadow-[0_0_16px_rgba(83,104,120,0.2)]";
+    return "bg-[linear-gradient(90deg,#b5b09d_0%,#a39e8b_50%,#8f8a78_100%)] shadow-[0_0_10px_rgba(163,158,139,0.10)]";
   }
   if (vote === "Bearish") {
-    return "bg-[rgba(83,104,120,0.52)] shadow-[0_0_16px_rgba(83,104,120,0.16)]";
+    return "bg-[linear-gradient(90deg,#b5b09d_0%,#a39e8b_50%,#8f8a78_100%)] shadow-[0_0_10px_rgba(163,158,139,0.10)]";
   }
-  return "bg-[rgba(127,144,150,0.58)] shadow-[0_0_16px_rgba(83,104,120,0.16)]";
+  return "bg-[linear-gradient(90deg,#b5b09d_0%,#a39e8b_50%,#8f8a78_100%)] shadow-[0_0_10px_rgba(163,158,139,0.10)]";
 }
 
 function WalletFlowsMvpSection({
@@ -10801,11 +10752,10 @@ function WalletFlowsMvpSection({
   }
 
   return (
-    <div className="mx-auto max-w-[1680px] space-y-3">
+    <div className="nova-wallet-flows-surface mx-auto max-w-[1680px] space-y-3">
       <TerminalSectionHeader
-        badge="Holder Behavior Intelligence"
         subtitle="Behavioral intelligence derived from analyzed holders. Nova evaluates wallet quality, discipline, ownership structure and conviction patterns."
-        title="Wallet Flows"
+        title="Holder Behavior Intelligence"
       >
         <div className="grid gap-2 rounded-2xl nova-card-inner p-3 text-xs text-[color:var(--nova-text-muted)] sm:grid-cols-3 lg:min-w-[420px]">
           <BehaviorTinyFact label="Token" value={cleanTokenSymbol(tokenData.symbol)} />
@@ -10817,21 +10767,13 @@ function WalletFlowsMvpSection({
         </div>
       </TerminalSectionHeader>
 
-      {(providerLimitReached || behaviorModel.hasPartialInput) && (
+      {providerLimitReached && (
         <div className="grid gap-3 lg:grid-cols-3">
-          {providerLimitReached && (
-            <HolderBehaviorNotice
-              title="Provider limit reached"
-              detail="One or more providers reported a limit or rate restriction. The page is using the partial state already loaded."
-              tone="warning"
-            />
-          )}
-          {behaviorModel.hasPartialInput && (
-            <HolderBehaviorNotice
-              title="Partial input"
-              detail="Some wallet sources are missing or incomplete, so confidence and labels are conservative."
-            />
-          )}
+          <HolderBehaviorNotice
+            title="Provider limit reached"
+            detail="One or more providers reported a limit or rate restriction. The page is using the partial state already loaded."
+            tone="warning"
+          />
         </div>
       )}
 
@@ -11177,7 +11119,7 @@ function buildHolderBehaviorSummary({
 function BehaviorScoreCard({ score }: { score: HolderBehaviorScore }) {
   return (
     <div className="min-h-[132px] rounded-2xl nova-card-inner p-4">
-      <p className="text-3xl font-semibold tracking-[-0.06em] text-[color:var(--nova-text)]">
+      <p className="nova-display nova-wallet-score text-3xl tracking-[-0.02em] text-[#E3E0D7]">
         {formatNullableScore(score.value)}
       </p>
       <p className="mt-2 text-[10px] uppercase tracking-[0.16em] text-[color:var(--nova-text-soft)]">
@@ -11245,9 +11187,9 @@ function BehaviorBarRow({ metric }: { metric: HolderBehaviorMetric }) {
           {value === null ? "N/A" : `${Math.round(value)}%`}
         </span>
       </div>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full nova-card-inner">
+      <div className="nova-wallet-progress-track mt-2 h-1.5 overflow-hidden rounded-full nova-card-inner">
         <div
-          className="h-full rounded-full bg-[rgba(127,144,150,0.68)] shadow-[0_0_12px_rgba(83,104,120,0.18)]"
+          className="h-full rounded-full bg-[linear-gradient(90deg,#b5b09d_0%,#a39e8b_50%,#8f8a78_100%)] shadow-[0_0_10px_rgba(163,158,139,0.10)]"
           style={{ width: `${value ?? 0}%` }}
         />
       </div>
@@ -11326,7 +11268,7 @@ function TopConvictionContributorsTable({
             {contributors.map((contributor) => (
               <div
                 key={contributor.address || contributor.displayAddress}
-                className={`grid min-h-[52px] min-w-[920px] ${gridClass} items-center gap-3 ${terminalRowClass}`}
+                className={`nova-wallet-row grid min-h-[52px] min-w-[920px] ${gridClass} items-center gap-3 ${terminalRowClass}`}
               >
                 <p className="truncate font-mono text-[color:var(--nova-text-soft)]">
                   {contributor.displayAddress}
@@ -11343,7 +11285,7 @@ function TopConvictionContributorsTable({
                 >
                   {formatContribution(contributor.contribution)}
                 </span>
-                <span className="text-center font-mono text-sm tabular-nums text-[color:var(--nova-text-soft)]">
+                <span className="nova-display nova-wallet-score text-center text-sm tabular-nums tracking-[-0.02em] text-[#E3E0D7]">
                   {formatNullableScore(contributor.quality)}
                 </span>
                 <p className="truncate text-xs text-[color:var(--nova-text-muted)]">
@@ -11463,7 +11405,6 @@ function InsiderScanDashboard({
   const moduleSummaries = readRecord(novaConviction?.moduleSummaries);
   const riskStats = readRecord(moduleSummaries?.riskStats);
   const riskPressure = readRecord(moduleSummaries?.riskPressure);
-  const riskSubScores = readRecord(riskPressure?.subScores);
   const holderAlpha = readRecord(moduleSummaries?.holderAlpha);
   const holderAlphaDepth =
     readRecord(novaConviction?.holderAlphaDepth) ??
@@ -11502,10 +11443,9 @@ function InsiderScanDashboard({
   }
 
   return (
-    <div className="mx-auto max-w-[1680px] space-y-4">
+    <div className="nova-insider-scan-surface mx-auto max-w-[1680px] space-y-4">
       <TerminalSectionHeader
-        eyebrow="Insider Scan"
-        subtitle="Loaded holder, ownership, and GMGN risk evidence summarized into structural risk signals."
+        subtitle=""
         title="Structural Holder Intelligence"
       >
         <div className="flex items-center gap-3 self-center rounded-2xl nova-card-inner px-4 py-3 lg:min-w-[330px]">
@@ -11553,27 +11493,6 @@ function InsiderScanDashboard({
         <>
           <InsiderV3RiskPanel model={riskModel} />
 
-          <section>
-            <ForensicSectionHeading
-              eyebrow="Evidence Review"
-              title="Loaded Evidence"
-              description="A compact read of concentration, tagged risk, and holder quality."
-            />
-            <div className="mt-3 grid gap-3 xl:grid-cols-3">
-              {buildInsiderEvidenceCards({
-                holderAlpha,
-                riskStats,
-                riskSubScores,
-              }).map((card) => (
-                <InsiderEvidenceCard
-                  key={card.label}
-                  label={card.label}
-                  rows={card.rows}
-                />
-              ))}
-            </div>
-          </section>
-
           <InsiderRiskGroupGrid groups={riskGroups} />
         </>
       )}
@@ -11603,11 +11522,6 @@ type InsiderRiskModel = {
   label: string;
   metrics: InsiderRiskMetric[];
   score: number | null;
-};
-
-type InsiderEvidenceModel = {
-  label: string;
-  rows: string[];
 };
 
 type InsiderRiskGroupModel = {
@@ -11707,14 +11621,14 @@ function buildInsiderRiskModel({
 
 function InsiderV3RiskPanel({ model }: { model: InsiderRiskModel }) {
   return (
-    <section className={`rounded-[2rem] p-5 ${terminalGlassCardClass}`}>
+    <section className={`nova-insider-holder-table rounded-[2rem] p-5 ${terminalGlassCardClass}`}>
       <div className="grid gap-5 xl:grid-cols-[0.72fr_1.28fr] xl:items-start">
         <div>
           <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--nova-accent-soft)]">
             Structural Risk
           </p>
           <div className="mt-4 flex items-end gap-2">
-            <p className="text-6xl font-light tracking-[-0.065em] text-[color:var(--nova-text)]">
+            <p className="nova-display nova-insider-score text-6xl tracking-[-0.02em] text-[#E3E0D7]">
               {formatInsiderScore(model.score)}
             </p>
             {model.score !== null && (
@@ -11736,9 +11650,9 @@ function InsiderV3RiskPanel({ model }: { model: InsiderRiskModel }) {
               ))}
             </div>
           )}
-          <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-[rgba(170,183,196,0.08)]">
+          <div className="nova-insider-progress-track mt-4 h-1.5 overflow-hidden rounded-full">
             <div
-              className="h-full rounded-full bg-[color:var(--nova-accent)] shadow-[0_0_18px_rgba(83,104,120,0.26)]"
+              className="nova-insider-progress-fill h-full rounded-full"
               style={{ width: `${model.score === null ? 0 : normalizeScore(model.score)}%` }}
             />
           </div>
@@ -11760,12 +11674,12 @@ function InsiderRiskMetricBox({ metric }: { metric: InsiderRiskMetric }) {
       <p className="text-[10px] uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
         {metric.label}
       </p>
-      <p className="mt-2 text-lg font-medium tabular-nums text-[color:var(--nova-text)]">
+      <p className="nova-display nova-insider-score mt-2 text-lg tabular-nums text-[#E3E0D7]">
         {metric.value}
       </p>
-      <div className="mt-3 h-1 overflow-hidden rounded-full bg-[rgba(170,183,196,0.08)]">
+      <div className="nova-insider-progress-track mt-3 h-1 overflow-hidden rounded-full">
         <div
-          className="h-full rounded-full bg-[rgba(170,183,196,0.58)]"
+          className="nova-insider-progress-fill h-full rounded-full"
           style={{ width: `${metric.barValue === null ? 0 : normalizeScore(metric.barValue)}%` }}
         />
       </div>
@@ -11773,40 +11687,22 @@ function InsiderRiskMetricBox({ metric }: { metric: InsiderRiskMetric }) {
   );
 }
 
-function InsiderEvidenceCard({ label, rows }: InsiderEvidenceModel) {
-  return (
-    <div className={`min-h-[184px] rounded-2xl p-4 ${terminalGlassCardClass}`}>
-      <p className="text-xs uppercase tracking-[0.18em] text-[color:var(--nova-accent-soft)]">{label}</p>
-      <div className="mt-4 space-y-2.5">
-        {rows.map((row) => (
-          <div key={row} className="flex gap-2 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
-            <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-[rgba(170,183,196,0.36)]" />
-            <span>{row}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function InsiderRiskGroupGrid({ groups }: { groups: InsiderRiskGroupModel[] }) {
   return (
-    <section>
-      <ForensicSectionHeading
-        eyebrow="Structural Tags"
-        title="Detected Risk Groups"
-        description="Risk groups are rendered only when currently loaded Nova evidence contains the corresponding signal."
-      />
-      <div className="mt-3 grid w-full auto-rows-fr gap-3 md:grid-cols-2 xl:grid-cols-3">
+    <section className="nova-insider-risk-groups rounded-[28px] p-5">
+      <h2 className="text-2xl font-semibold tracking-[-0.05em] text-[color:var(--nova-text)]">
+        Detected Risk Groups
+      </h2>
+      <div className="mt-3 grid w-full auto-rows-fr grid-cols-1 gap-3.5 md:grid-cols-2 xl:grid-cols-4">
         {groups.length === 0 ? (
-          <div className={`rounded-2xl p-4 text-sm text-[color:var(--nova-text-soft)] md:col-span-2 xl:col-span-3 ${terminalGlassCardClass}`}>
+          <div className="nova-insider-risk-group-card rounded-[22px] p-[18px] text-sm text-[color:var(--nova-text-soft)] md:col-span-2 xl:col-span-4">
             No material risk groups detected from currently loaded evidence.
           </div>
         ) : (
           groups.map((group) => (
             <div
               key={group.title}
-              className={`flex h-full min-h-[168px] flex-col rounded-2xl p-4 ${terminalGlassCardClass}`}
+              className="nova-insider-risk-group-card flex h-full min-h-[168px] flex-col rounded-[22px] p-[18px]"
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -11817,9 +11713,6 @@ function InsiderRiskGroupGrid({ groups }: { groups: InsiderRiskGroupModel[] }) {
                     {group.exposure}
                   </p>
                 </div>
-                <span className={`whitespace-nowrap rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.14em] ${riskGroupLevelClass(group.level)}`}>
-                  {group.level}
-                </span>
               </div>
               <p className="mt-3 text-xs leading-relaxed text-[color:var(--nova-text-soft)]">
                 {group.text}
@@ -11870,7 +11763,7 @@ function InsiderHolderDepthStats({
           <p className="text-[10px] uppercase tracking-[0.16em] text-[color:var(--nova-text-muted)]">
             {stat.label}
           </p>
-          <p className="mt-2 text-xl font-medium tabular-nums text-[color:var(--nova-text)]">
+          <p className="nova-display nova-insider-score mt-2 text-xl tabular-nums text-[#E3E0D7]">
             {formatInsiderCount(stat.value)}
           </p>
         </div>
@@ -11915,8 +11808,8 @@ function InsiderV3HolderTable({
         </span>
       </div>
 
-      <div className={`w-full overflow-x-auto rounded-[1.4rem] ${terminalGlassCardClass}`}>
-        <div className={`grid min-h-[42px] w-full min-w-[980px] ${gridClass} items-center gap-3 ${terminalTableHeaderClass}`}>
+      <div className={`nova-insider-holder-scroll w-full overflow-x-auto rounded-[1.4rem] ${terminalGlassCardClass}`}>
+        <div className={`nova-insider-holder-grid grid min-h-[42px] w-full min-w-[980px] ${gridClass} items-center gap-3 ${terminalTableHeaderClass}`}>
           <span>Rank</span>
           <span>Wallet</span>
           <span className="text-center">Ownership</span>
@@ -11925,7 +11818,7 @@ function InsiderV3HolderTable({
           <span className="text-center">Analysis</span>
         </div>
 
-        <div className="w-full min-w-[980px]">
+        <div className="nova-insider-holder-grid w-full min-w-[980px]">
           {isIdle && (
             <HolderStateMessage
               title="Select a token to activate holder intelligence."
@@ -11959,7 +11852,7 @@ function InsiderV3HolderTable({
                     current === row.wallet ? "" : row.wallet
                   )
                 }
-                className={`grid min-h-[52px] w-full ${gridClass} items-center gap-3 text-left text-[13px] focus:outline-none focus:ring-1 focus:ring-inset focus:ring-[rgba(83,104,120,0.24)] ${terminalRowClass}`}
+                className={`nova-insider-holder-grid nova-insider-row grid min-h-[52px] w-full ${gridClass} items-center gap-3 text-left text-[13px] focus:outline-none focus:ring-1 focus:ring-inset focus:ring-[rgba(105,101,90,0.24)] ${terminalRowClass}`}
               >
                 <span className="font-mono text-[color:var(--nova-text-muted)]">
                   {row.rank === null ? "N/A" : `#${row.rank}`}
@@ -11969,16 +11862,16 @@ function InsiderV3HolderTable({
                     {shortInsiderWalletAddress(row.wallet)}
                   </p>
                 </div>
-                <span className="text-center font-medium tabular-nums text-[color:var(--nova-accent-soft)]">
+                <span className="nova-display nova-insider-score text-center text-sm tabular-nums text-[#E3E0D7]">
                   {formatInsiderPercent(row.ownershipPercent)}
                 </span>
                 <div>
-                  <p className="text-center font-medium tabular-nums text-[color:var(--nova-text)]">
+                  <p className="nova-display nova-insider-score text-center text-sm tabular-nums text-[#E3E0D7]">
                     {formatInsiderScore(row.score)}
                   </p>
-                  <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[rgba(170,183,196,0.08)]">
+                  <div className="nova-insider-progress-track mt-1.5 h-1 overflow-hidden rounded-full">
                     <div
-                      className="h-full rounded-full bg-[rgba(170,183,196,0.58)]"
+                      className="nova-insider-progress-fill h-full rounded-full"
                       style={{ width: `${row.score === null ? 0 : normalizeScore(row.score)}%` }}
                     />
                   </div>
@@ -12005,11 +11898,11 @@ function InsiderWalletExpandedPanel({ row }: { row: InsiderHolderRowV3 }) {
   const scoreMetrics = buildInsiderWalletScoreMetrics(row);
 
   return (
-    <div className="border-b border-[color:rgba(83,104,120,0.12)] bg-[rgba(8,37,51,0.16)] px-4 py-4">
+    <div className="nova-insider-holder-detail border-b border-[color:rgba(105,101,90,0.18)] bg-[rgba(105,101,90,0.10)] px-4 py-4">
       <div className={`rounded-2xl p-4 ${terminalGlassCardClass}`}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
-            <p className="break-all font-mono text-xs text-[color:var(--nova-text)]">
+            <p className="nova-insider-wallet-address break-all font-mono text-xs text-[color:var(--nova-text)]">
               {row.wallet}
             </p>
             <div className="mt-2 flex flex-wrap gap-2">
@@ -12051,80 +11944,18 @@ function InsiderWalletScoreBar({ metric }: { metric: InsiderWalletScoreMetric })
         <p className="truncate text-[10px] uppercase tracking-[0.14em] text-[color:var(--nova-text-muted)]">
           {metric.label}
         </p>
-        <p className="shrink-0 text-xs font-medium tabular-nums text-[color:var(--nova-text-soft)]">
+        <p className="nova-display nova-insider-score shrink-0 text-xs tabular-nums text-[#E3E0D7]">
           {metric.value}
         </p>
       </div>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[rgba(170,183,196,0.08)]">
+      <div className="nova-insider-progress-track mt-2 h-1.5 overflow-hidden rounded-full">
         <div
-          className="h-full rounded-full bg-[rgba(170,183,196,0.58)]"
+          className="nova-insider-progress-fill h-full rounded-full"
           style={{ width: `${metric.barValue === null ? 0 : normalizeScore(metric.barValue)}%` }}
         />
       </div>
     </div>
   );
-}
-
-function buildInsiderEvidenceCards({
-  holderAlpha,
-  riskStats,
-  riskSubScores,
-}: {
-  holderAlpha: Record<string, unknown> | null;
-  riskStats: Record<string, unknown> | null;
-  riskSubScores: Record<string, unknown> | null;
-}): InsiderEvidenceModel[] {
-  const top10HolderPercentage = numberField(riskStats, "top10HolderPercentage");
-  const holderCount = numberField(riskStats, "holderCount");
-  const analyzedOwnership = numberField(holderAlpha, "totalAnalyzedOwnershipPercent");
-  const taggedRiskRows = [
-    positiveEvidence(numberField(riskStats, "bundlerPercentage"))
-      ? `Bundler exposure is ${formatInsiderPercent(numberField(riskStats, "bundlerPercentage"))}.`
-      : null,
-    positiveEvidence(numberField(riskStats, "phishingPercentage"))
-      ? `Phishing exposure is ${formatInsiderPercent(numberField(riskStats, "phishingPercentage"))}.`
-      : null,
-    positiveEvidence(numberField(riskStats, "freshWalletPercentage"))
-      ? `Fresh-wallet exposure is ${formatInsiderPercent(numberField(riskStats, "freshWalletPercentage"))}.`
-      : null,
-    positiveEvidence(numberField(riskStats, "top70SniperHoldPercentage"))
-      ? `Sniper holder exposure is ${formatInsiderPercent(numberField(riskStats, "top70SniperHoldPercentage"))}.`
-      : null,
-  ].filter((row): row is string => Boolean(row));
-  const weakOwnership = numberField(holderAlpha, "weakOrToxicOwnershipPercent");
-  const goodOwnership = numberField(holderAlpha, "goodOrBetterOwnershipPercent");
-  const weakHolderRiskScore = numberField(riskSubScores, "weakHolderRiskScore");
-
-  return [
-    {
-      label: "Concentration",
-      rows: [
-        top10HolderPercentage !== null
-          ? `Top 10 holders control ${formatInsiderPercent(top10HolderPercentage)} of supply.`
-          : null,
-        holderCount !== null && analyzedOwnership !== null
-          ? `Nova analyzed ${formatInsiderCount(holderCount)} holders covering ${formatInsiderPercent(analyzedOwnership)} ownership.`
-          : holderCount !== null
-            ? `GMGN reports ${formatInsiderCount(holderCount)} holders.`
-            : null,
-      ].filter((row): row is string => Boolean(row)).slice(0, 2),
-    },
-    {
-      label: "Tagged Risk",
-      rows: taggedRiskRows.length ? taggedRiskRows.slice(0, 2) : ["No tagged exposure detected."],
-    },
-    {
-      label: "Holder Quality",
-      rows: [
-        weakOwnership !== null && goodOwnership !== null
-          ? `Weak/toxic ownership is ${formatInsiderPercent(weakOwnership)} vs ${formatInsiderPercent(goodOwnership)} good+ ownership.`
-          : null,
-        weakHolderRiskScore !== null
-          ? `Weak holder pressure is ${formatInsiderScore(weakHolderRiskScore)}/100.`
-          : null,
-      ].filter((row): row is string => Boolean(row)).slice(0, 2),
-    },
-  ];
 }
 
 function buildInsiderRiskGroups({
@@ -12463,16 +12294,6 @@ function riskLevelFromPercent(value: number | null) {
   if (value >= 15) return "Elevated";
   if (value > 0) return "Moderate";
   return "Low";
-}
-
-function riskGroupLevelClass(level: string) {
-  if (level === "Critical" || level === "Elevated") {
-    return "border-[color:rgba(83,104,120,0.32)] bg-[rgba(83,104,120,0.1)] text-[color:var(--nova-danger)]";
-  }
-  if (level === "Moderate") {
-    return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-warning)]";
-  }
-  return "border-[color:var(--nova-border)] nova-card-inner text-[color:var(--nova-text-soft)]";
 }
 
 function insiderAnalysisType(wallet: Record<string, unknown>) {
@@ -13115,7 +12936,7 @@ function OverviewTopHoldersTable({
                     onSelectWallet(row, matchedProfile);
                   }
                 }}
-                className={`group grid ${overviewHolderGridClass} cursor-pointer items-center gap-3 border-b border-[color:rgba(83,104,120,0.12)] px-4 py-2.5 text-left text-[13px] transition hover:nova-card-inner focus:outline-none focus:ring-1 focus:ring-inset focus:ring-[rgba(83,104,120,0.2)]`}
+                className={`nova-overview-holder-row group grid ${overviewHolderGridClass} cursor-pointer items-center gap-3 border-b border-[color:rgba(83,104,120,0.12)] px-4 py-2.5 text-left text-[13px] transition duration-300 ease-out hover:border-[rgba(105,101,90,0.32)] hover:bg-[rgba(105,101,90,0.22)] hover:text-[#E3E0D7] focus:outline-none focus:ring-1 focus:ring-inset focus:ring-[rgba(105,101,90,0.24)]`}
               >
                 <span className="text-[color:var(--nova-text-muted)]">{row.rank}</span>
                 <div className="min-w-0">

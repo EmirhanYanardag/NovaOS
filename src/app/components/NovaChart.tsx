@@ -1,12 +1,13 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   AreaSeries,
   ColorType,
   createChart,
   IChartApi,
   ISeriesApi,
+  LineSeries,
   LineStyle,
   UTCTimestamp,
 } from "lightweight-charts";
@@ -30,7 +31,8 @@ type NovaChartProps = {
   chartHeight?: number;
 };
 
-const timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"];
+const defaultTimeframe = "1h";
+const timeframes = ["1m", "5m", "15m", defaultTimeframe, "4h", "1d"];
 
 function timeframeLabel(tf: string) {
   if (tf === "1m") return "1M";
@@ -41,6 +43,38 @@ function timeframeLabel(tf: string) {
   if (tf === "1d") return "1D";
 
   return tf.toUpperCase();
+}
+
+function normalizeChartCandles(items: Candle[]) {
+  const map = new Map<number, Candle>();
+
+  for (const item of items) {
+    const time = Number(item.time);
+    const open = Number(item.open);
+    const high = Number(item.high);
+    const low = Number(item.low);
+    const close = Number(item.close);
+
+    if (
+      !time ||
+      !Number.isFinite(open) ||
+      !Number.isFinite(high) ||
+      !Number.isFinite(low) ||
+      !Number.isFinite(close)
+    ) {
+      continue;
+    }
+
+    map.set(time, {
+      time: time as UTCTimestamp,
+      open,
+      high,
+      low,
+      close,
+    });
+  }
+
+  return Array.from(map.values()).sort((a, b) => a.time - b.time);
 }
 
 function NovaChartComponent({
@@ -56,31 +90,56 @@ function NovaChartComponent({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const areaSeriesRef = useRef<ISeriesApi<"Area"> | null>(null);
+  const lineGlowSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const candlesRef = useRef<Candle[]>([]);
   const hasFittedRef = useRef(false);
+  const reflowFrameRef = useRef<number | null>(null);
 
-  const [timeframe, setTimeframe] = useState("1h");
+  const [timeframe, setTimeframe] = useState(defaultTimeframe);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const candleCountText = useMemo(() => {
-    if (!candles.length) return "No candles";
-    return `${candles.length.toLocaleString()} candles`;
-  }, [candles.length]);
+  const reflowChart = useCallback(() => {
+    if (!containerRef.current || !chartRef.current) return;
+
+    const bounds = containerRef.current.getBoundingClientRect();
+    chartRef.current.applyOptions({
+      width: Math.round(bounds.width) || 900,
+      height: Math.round(bounds.height) || chartHeight,
+    });
+  }, [chartHeight]);
+
+  const scheduleChartReflow = useCallback(() => {
+    if (reflowFrameRef.current !== null) {
+      cancelAnimationFrame(reflowFrameRef.current);
+    }
+
+    reflowFrameRef.current = requestAnimationFrame(() => {
+      reflowFrameRef.current = null;
+      reflowChart();
+      requestAnimationFrame(reflowChart);
+    });
+  }, [reflowChart]);
 
   useEffect(() => {
     hasFittedRef.current = false;
-    const resetFrame = requestAnimationFrame(() => {
+    let active = true;
+
+    queueMicrotask(() => {
+      if (!active) return;
+
       setCandles([]);
       setError("");
     });
 
     if (!pairAddress || !chain) {
-      return () => cancelAnimationFrame(resetFrame);
+      scheduleChartReflow();
+      return () => {
+        active = false;
+      };
     }
 
-    let active = true;
     const controller = new AbortController();
 
     async function fetchCandles() {
@@ -104,7 +163,7 @@ function NovaChartComponent({
           return;
         }
 
-        setCandles(data.candles || []);
+        setCandles(normalizeChartCandles(data.candles || []));
       } catch (err) {
         if (!active) return;
         if (err instanceof Error && err.name === "AbortError") return;
@@ -119,10 +178,9 @@ function NovaChartComponent({
 
     return () => {
       active = false;
-      cancelAnimationFrame(resetFrame);
       controller.abort();
     };
-  }, [chain, pairAddress, timeframe]);
+  }, [chain, pairAddress, scheduleChartReflow, timeframe]);
 
   useEffect(() => {
     if (!containerRef.current || chartRef.current) return;
@@ -136,7 +194,8 @@ function NovaChartComponent({
           type: ColorType.Solid,
           color: "rgba(5,8,11,0)",
         },
-        textColor: "rgba(178,190,181,0.55)",
+        textColor: "rgba(227,224,215,0.42)",
+        fontSize: 11,
         attributionLogo: false,
       },
       grid: {
@@ -173,6 +232,7 @@ function NovaChartComponent({
         borderColor: "rgba(178,190,181,0.10)",
         timeVisible: true,
         secondsVisible: false,
+        minimumHeight: 36,
         rightOffset: 8,
         barSpacing: 6,
         minBarSpacing: 2,
@@ -193,11 +253,19 @@ function NovaChartComponent({
       },
     });
 
+    const lineGlowSeries = chart.addSeries(LineSeries, {
+      color: "rgba(255,255,255,0.08)",
+      lineWidth: 4,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    });
+
     const areaSeries = chart.addSeries(AreaSeries, {
       lineColor: "#E5E4E2",
       lineWidth: 2,
-      topColor: "rgba(178,190,181,0.16)",
-      bottomColor: "rgba(10,10,10,0.02)",
+      topColor: "rgba(230,230,230,0.10)",
+      bottomColor: "rgba(0,0,0,0)",
       priceLineColor: "rgba(178,190,181,0.30)",
       priceLineWidth: 1,
       lastValueVisible: true,
@@ -205,33 +273,24 @@ function NovaChartComponent({
 
     chartRef.current = chart;
     areaSeriesRef.current = areaSeries;
+    lineGlowSeriesRef.current = lineGlowSeries;
 
-    function resizeChartToContainer() {
-      if (!containerRef.current || !chartRef.current) return;
-
-      const bounds = containerRef.current.getBoundingClientRect();
-      chartRef.current.applyOptions({
-        width: Math.round(bounds.width) || 900,
-        height: Math.round(bounds.height) || chartHeight,
-      });
-    }
-
-    const resizeObserver = new ResizeObserver(resizeChartToContainer);
+    const resizeObserver = new ResizeObserver(reflowChart);
     resizeObserver.observe(containerRef.current);
-    const resizeFrame = requestAnimationFrame(resizeChartToContainer);
-    window.addEventListener("resize", resizeChartToContainer);
+    scheduleChartReflow();
+    window.addEventListener("resize", reflowChart);
 
     return () => {
-      cancelAnimationFrame(resizeFrame);
       resizeObserver.disconnect();
-      window.removeEventListener("resize", resizeChartToContainer);
+      window.removeEventListener("resize", reflowChart);
 
       chart.remove();
 
       chartRef.current = null;
       areaSeriesRef.current = null;
+      lineGlowSeriesRef.current = null;
     };
-  }, [chartHeight]);
+  }, [chartHeight, reflowChart, scheduleChartReflow]);
 
   useEffect(() => {
     if (!chartRef.current || !areaSeriesRef.current) return;
@@ -290,24 +349,28 @@ function NovaChartComponent({
   }, []);
 
   useEffect(() => {
+    candlesRef.current = candles;
+
     if (!chartRef.current || !areaSeriesRef.current) {
       return;
     }
 
-    candlesRef.current = candles;
+    scheduleChartReflow();
 
     if (!candles.length) {
       areaSeriesRef.current.setData([]);
+      lineGlowSeriesRef.current?.setData([]);
       chartRef.current.priceScale("right").setAutoScale(true);
       return;
     }
 
-    areaSeriesRef.current.setData(
-      candles.map((candle) => ({
-        time: candle.time,
-        value: candle.close,
-      }))
-    );
+    const lineData = candles.map((candle) => ({
+      time: candle.time,
+      value: candle.close,
+    }));
+
+    lineGlowSeriesRef.current?.setData(lineData);
+    areaSeriesRef.current.setData(lineData);
 
     if (!hasFittedRef.current) {
       const visibleBars = timeframe === "1m" || timeframe === "5m" ? 180 : 260;
@@ -354,7 +417,7 @@ function NovaChartComponent({
         to: maxPrice + padding,
       });
     });
-  }, [candles, timeframe]);
+  }, [candles, scheduleChartReflow, timeframe]);
 
   return (
     <div
@@ -414,18 +477,14 @@ function NovaChartComponent({
           ))}
         </div>
 
-        <div className="hidden items-center gap-4 text-xs text-[color:var(--nova-text-muted)] md:flex">
-          <span>{candleCountText}</span>
-          <span>USD</span>
-          <span>{loading ? "Syncing..." : "Live closes"}</span>
-        </div>
+        <div aria-hidden="true" className="hidden md:block" />
       </div>
 
-      <div className="nova-chart-body relative z-10 min-h-0 flex-1 overflow-hidden">
+      <div className="nova-chart-body relative z-10 min-h-0 flex-1 overflow-visible pb-9">
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-0 h-2/3 bg-[radial-gradient(ellipse_at_50%_100%,rgba(178,190,181,0.10),rgba(10,10,10,0.08)_42%,transparent_72%)]" />
         <div
           ref={containerRef}
-          className="absolute inset-0 z-10 h-full min-h-0 w-full"
+          className="nova-chart-container absolute inset-x-0 top-0 z-10 min-h-0 w-full"
         />
 
         {!pairAddress && (

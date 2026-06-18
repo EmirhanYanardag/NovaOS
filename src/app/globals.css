@@ -116,6 +116,33 @@ body {
   background-clip: padding-box;
 }
 
+.nova-token-results-scroll {
+  scrollbar-color: rgba(181, 176, 159, 0.32) rgba(255, 255, 255, 0.04);
+  scrollbar-width: thin;
+}
+
+.nova-token-results-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 0;
+}
+
+.nova-token-results-scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
+.nova-token-results-scroll::-webkit-scrollbar-thumb {
+  background: rgba(181, 176, 159, 0.32);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+.nova-token-results-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(181, 176, 159, 0.48);
+  background-clip: padding-box;
+}
+
 @layer utilities {
   @keyframes novaScoreSymbolRotate {
     0% {
@@ -272,10 +299,21 @@ body {
     text-shadow: 0 0 28px rgba(178, 190, 181, 0.10);
   }
 
-  .nova-chart-body > div,
-  .nova-chart-body table,
-  .nova-chart-body canvas {
+  .nova-chart-body {
     height: 100% !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  .nova-chart-container > div {
+    height: 100% !important;
+    min-height: 0 !important;
+  }
+
+  .nova-chart-body > .nova-chart-container {
+    bottom: 36px !important;
+    height: calc(100% - 36px) !important;
+    min-height: 0 !important;
   }
 
   .entry-subtitle-glow {
@@ -293,6 +331,149 @@ body {
       inset 0 1px 0 rgba(229, 228, 226, 0.05),
       0 28px 88px rgba(0, 0, 0, 0.42),
       0 0 46px rgba(83, 104, 120, 0.10);
+  }
+
+  .nova-landing {
+    background: #030303;
+    font-family: var(--font-geist-sans), "Geist", "Inter", "Helvetica Neue", Arial, sans-serif;
+  }
+
+  .nova-landing > :not(.shader-landing-background) {
+    position: relative;
+    z-index: 10;
+  }
+
+  .nova-landing .nova-display {
+    font-family: "Milker", var(--font-geist-sans), "Geist", "Inter", "Helvetica Neue", Arial, sans-serif;
+    font-weight: 900;
+    letter-spacing: -0.032em;
+    line-height: 0.94;
+    text-transform: uppercase;
+    color: #E3E0D7;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  .nova-landing .nova-hero-title {
+    color: #E3E0D7;
+  }
+
+  .nova-landing .nova-tech {
+    font-family: var(--font-geist-sans), "Geist", "Inter", "Helvetica Neue", Arial, sans-serif;
+    letter-spacing: 0.18em;
+  }
+
+  .nova-landing .nova-copy {
+    font-family: var(--font-geist-sans), "Geist", "Inter", "Helvetica Neue", Arial, sans-serif;
+    letter-spacing: -0.01em;
+  }
+
+  .nova-landing .gradient-word {
+    background: linear-gradient(92deg, #E3E0D7 0%, #BEB8A5 54%, #8F8A7C 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-shadow: none;
+  }
+
+  .nova-landing .nova-landing-button {
+    border: 1.8px solid rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
+    background: rgba(8, 8, 10, 0.22);
+    color: rgba(255, 255, 255, 0.90);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.18),
+      inset 0 0 20px rgba(255, 255, 255, 0.03),
+      0 12px 40px rgba(0, 0, 0, 0.28),
+      0 0 0 1px rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+    transition:
+      transform 500ms cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 500ms cubic-bezier(0.22, 1, 0.36, 1),
+      background 500ms cubic-bezier(0.22, 1, 0.36, 1),
+      color 500ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 500ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .nova-landing .nova-landing-button:hover {
+    transform: translateY(-2px) scale(1.02);
+    border-color: rgba(181, 176, 159, 0.34);
+    background: rgba(181, 176, 159, 0.10);
+    color: #F1EEE5;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.22),
+      inset 0 0 22px rgba(255, 255, 255, 0.04),
+      0 16px 48px rgba(0, 0, 0, 0.34),
+      0 0 0 1px rgba(255, 255, 255, 0.05),
+      0 0 24px rgba(181, 176, 159, 0.14),
+      0 0 60px rgba(181, 176, 159, 0.06);
+  }
+
+  .nova-landing .nova-landing-button:active {
+    transform: translateY(0) scale(0.99);
+    border-color: rgba(181, 176, 159, 0.24);
+    background: rgba(181, 176, 159, 0.08);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.10),
+      0 0 18px rgba(181, 176, 159, 0.10),
+      0 0 42px rgba(181, 176, 159, 0.04);
+  }
+
+  .nova-landing .nova-landing-button-cta {
+    min-width: 13.5rem;
+    justify-content: center;
+  }
+
+  .nova-landing .nova-landing-glass-card {
+    position: relative;
+    overflow: hidden;
+    border-radius: 28px;
+    border: 1.8px solid rgba(255, 255, 255, 0.12);
+    background: rgba(8, 8, 10, 0.22);
+    padding: 28px;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.18),
+      inset 0 0 30px rgba(255, 255, 255, 0.03),
+      0 0 0 1px rgba(255, 255, 255, 0.05),
+      0 25px 80px rgba(0, 0, 0, 0.40);
+    backdrop-filter: blur(32px);
+    -webkit-backdrop-filter: blur(32px);
+    transition:
+      transform 500ms cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 500ms cubic-bezier(0.22, 1, 0.36, 1),
+      background 500ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 500ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .nova-landing .nova-landing-glass-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background:
+      radial-gradient(ellipse at 50% 0%, rgba(255, 255, 255, 0.10), transparent 54%),
+      linear-gradient(145deg, rgba(255, 255, 255, 0.045), transparent 34%);
+    opacity: 0.7;
+    pointer-events: none;
+  }
+
+  .nova-landing .nova-landing-glass-card > * {
+    position: relative;
+    z-index: 10;
+  }
+
+  .nova-landing .nova-landing-glass-card:hover {
+    transform: translateY(-4px) scale(1.01);
+    border-color: rgba(255, 255, 255, 0.18);
+    background: rgba(12, 12, 14, 0.30);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.22),
+      inset 0 0 34px rgba(255, 255, 255, 0.04),
+      0 0 0 1px rgba(255, 255, 255, 0.065),
+      0 32px 92px rgba(0, 0, 0, 0.46);
   }
 }
 
@@ -381,6 +562,18 @@ body {
   .nova-section-title {
     font-size: clamp(2.35rem, 10.5vw, 4.5rem) !important;
     line-height: 1.02 !important;
+  }
+
+  .nova-landing .nova-hero-title {
+    font-size: clamp(2.95rem, 14.5vw, 5.95rem) !important;
+    line-height: 0.94 !important;
+    letter-spacing: -0.032em !important;
+  }
+
+  .nova-landing .nova-section-title {
+    font-size: clamp(2.32rem, 10.25vw, 4.45rem) !important;
+    line-height: 0.94 !important;
+    letter-spacing: -0.032em !important;
   }
 
   .nova-tech {
@@ -483,6 +676,14 @@ body {
     font-size: clamp(2.1rem, 12vw, 3rem) !important;
   }
 
+  .nova-landing .nova-hero-title {
+    font-size: clamp(2.68rem, 16.35vw, 3.9rem) !important;
+  }
+
+  .nova-landing .nova-section-title {
+    font-size: clamp(2.14rem, 11.75vw, 2.95rem) !important;
+  }
+
   .nova-terminal-idle-title {
     font-size: clamp(2rem, 13vw, 3.2rem) !important;
   }
@@ -502,5 +703,541 @@ body {
 
   .nova-score-label {
     padding-left: 6.25rem !important;
+  }
+}
+
+.nova-overview-surface {
+  scrollbar-color: rgba(181, 176, 159, 0.32) rgba(255, 255, 255, 0.04);
+}
+
+.nova-overview-surface * {
+  scrollbar-color: rgba(181, 176, 159, 0.32) rgba(255, 255, 255, 0.04);
+}
+
+.nova-overview-surface *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.nova-overview-surface *::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
+.nova-overview-surface *::-webkit-scrollbar-thumb {
+  background: rgba(181, 176, 159, 0.32);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+.nova-overview-surface *::-webkit-scrollbar-thumb:hover {
+  background: rgba(181, 176, 159, 0.48);
+  background-clip: padding-box;
+}
+
+.nova-overview-surface .nova-card,
+.nova-overview-surface .nova-card-strong,
+.nova-overview-surface .nova-panel,
+.nova-overview-surface .nova-panel-strong,
+.nova-overview-surface .nova-terminal-card {
+  background: rgba(5, 6, 8, 0.88) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 18px 54px rgba(0, 0, 0, 0.32) !important;
+  backdrop-filter: blur(18px) !important;
+  -webkit-backdrop-filter: blur(18px) !important;
+}
+
+.nova-overview-surface .nova-card-inner {
+  background: rgba(5, 6, 8, 0.88) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 18px 54px rgba(0, 0, 0, 0.32) !important;
+  backdrop-filter: blur(18px) !important;
+  -webkit-backdrop-filter: blur(18px) !important;
+}
+
+.nova-overview-surface .nova-chart-card {
+  background: rgba(5, 6, 8, 0.88) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 18px 54px rgba(0, 0, 0, 0.32) !important;
+  backdrop-filter: blur(18px) !important;
+  -webkit-backdrop-filter: blur(18px) !important;
+}
+
+.nova-overview-surface .nova-overview-score-card {
+  background: rgba(5, 6, 8, 0.88) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 18px 54px rgba(0, 0, 0, 0.32) !important;
+  backdrop-filter: blur(18px) !important;
+  -webkit-backdrop-filter: blur(18px) !important;
+}
+
+.nova-overview-surface section,
+.nova-overview-surface [class*="rounded-[2rem]"] {
+  border-color: rgba(181, 176, 159, 0.11);
+}
+
+.nova-overview-surface button:hover,
+.nova-overview-surface [role="button"]:hover,
+.nova-overview-surface a:hover {
+  border-color: rgba(181, 176, 159, 0.18) !important;
+  background-color: rgba(181, 176, 159, 0.08) !important;
+  color: #E3E0D7 !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+}
+
+.nova-overview-surface button:focus-visible,
+.nova-overview-surface [role="button"]:focus-visible {
+  border-color: rgba(181, 176, 159, 0.28) !important;
+  outline: none;
+}
+
+.nova-overview-surface .nova-overview-holder-row:hover {
+  background: rgba(105, 101, 90, 0.35) !important;
+  border-color: rgba(105, 101, 90, 0.32) !important;
+  color: #E3E0D7 !important;
+  box-shadow: none !important;
+}
+
+.nova-conviction-surface .nova-card,
+.nova-conviction-surface .nova-card-strong,
+.nova-conviction-surface .nova-panel,
+.nova-conviction-surface .nova-panel-strong,
+.nova-conviction-surface .nova-terminal-card,
+.nova-conviction-surface .nova-card-inner {
+  background: rgba(5, 6, 8, 0.88) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 18px 54px rgba(0, 0, 0, 0.32) !important;
+  backdrop-filter: blur(18px) !important;
+  -webkit-backdrop-filter: blur(18px) !important;
+}
+
+.nova-conviction-score {
+  color: #E3E0D7;
+  font-weight: 900;
+  text-shadow:
+    0 0 18px rgba(181, 176, 159, 0.16),
+    0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.nova-conviction-surface .nova-conviction-reason-card,
+.nova-conviction-surface .nova-conviction-pillar-panel {
+  background: rgba(0, 0, 0, 0.82) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 20px 58px rgba(0, 0, 0, 0.36) !important;
+  backdrop-filter: blur(18px) !important;
+  -webkit-backdrop-filter: blur(18px) !important;
+}
+
+.nova-conviction-main-bar {
+  background: #121212 !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.22) !important;
+}
+
+.nova-conviction-surface .nova-progress-bar {
+  background: rgba(18, 18, 18, 0.85) !important;
+}
+
+.nova-conviction-main-bar > div {
+  background:
+    linear-gradient(90deg, #b5b09d 0%, #a39e8b 50%, #8f8a78 100%) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    0 0 10px rgba(163, 158, 139, 0.1) !important;
+}
+
+.nova-conviction-surface .nova-progress-bar:hover > div {
+  filter: brightness(1.05);
+}
+
+.nova-ai-arena-surface .nova-card,
+.nova-ai-arena-surface .nova-card-strong,
+.nova-ai-arena-surface .nova-card-inner,
+.nova-ai-arena-surface .nova-panel,
+.nova-ai-arena-surface .nova-panel-strong,
+.nova-ai-arena-surface .nova-terminal-card {
+  background: rgba(8, 8, 10, 0.72) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 20px 60px rgba(0, 0, 0, 0.35) !important;
+  backdrop-filter: blur(18px) !important;
+  -webkit-backdrop-filter: blur(18px) !important;
+}
+
+.nova-ai-arena-surface .nova-arena-progress-track {
+  background: rgba(18, 18, 18, 0.9) !important;
+}
+
+.nova-ai-arena-surface button:hover,
+.nova-ai-arena-surface [role="button"]:hover {
+  background-color: rgba(163, 158, 139, 0.1) !important;
+  border-color: rgba(163, 158, 139, 0.28) !important;
+  color: #E3E0D7 !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+}
+
+.nova-ai-arena-surface button:focus-visible,
+.nova-ai-arena-surface [role="button"]:focus-visible {
+  border-color: rgba(163, 158, 139, 0.38) !important;
+  outline: none;
+}
+
+.nova-ai-arena-surface h2,
+.nova-ai-arena-surface h3,
+.nova-ai-arena-surface [class*="text-[color:var(--nova-text)]"] {
+  color: #E3E0D7;
+}
+
+.nova-ai-arena-surface [class*="text-[color:var(--nova-text-soft)]"],
+.nova-ai-arena-surface [class*="text-[color:var(--nova-text-muted)]"] {
+  color: rgba(227, 224, 215, 0.58);
+}
+
+.nova-wallet-flows-surface .nova-card,
+.nova-wallet-flows-surface .nova-card-strong,
+.nova-wallet-flows-surface .nova-card-inner,
+.nova-wallet-flows-surface .nova-panel,
+.nova-wallet-flows-surface .nova-panel-strong,
+.nova-wallet-flows-surface .nova-terminal-card {
+  background: rgba(8, 8, 10, 0.82) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 20px 60px rgba(0, 0, 0, 0.35) !important;
+  backdrop-filter: blur(18px) !important;
+  -webkit-backdrop-filter: blur(18px) !important;
+}
+
+.nova-wallet-flows-surface h1 {
+  color: rgba(227, 224, 215, 0.95) !important;
+  text-shadow: 0 0 8px rgba(163, 158, 139, 0.06);
+}
+
+.nova-wallet-flows-surface h1 .gradient-word {
+  background: linear-gradient(90deg, #E3E0D7 0%, #b5b09d 55%, #a39e8b 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 8px rgba(163, 158, 139, 0.06);
+}
+
+.nova-wallet-flows-surface .nova-wallet-progress-track {
+  background: rgba(18, 18, 18, 0.9) !important;
+}
+
+.nova-wallet-score {
+  color: #E3E0D7;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  text-shadow: 0 0 10px rgba(227, 224, 215, 0.08);
+}
+
+.nova-wallet-flows-surface .nova-wallet-row:hover {
+  background: linear-gradient(90deg, rgba(105, 101, 90, 0.3), rgba(163, 158, 139, 0.22)) !important;
+  box-shadow: none !important;
+  transition: all 180ms ease;
+}
+
+.nova-wallet-flows-surface button:hover,
+.nova-wallet-flows-surface [role="button"]:hover {
+  background-color: rgba(163, 158, 139, 0.1) !important;
+  border-color: rgba(163, 158, 139, 0.28) !important;
+  color: #E3E0D7 !important;
+}
+
+.nova-wallet-flows-surface h1,
+.nova-wallet-flows-surface h2,
+.nova-wallet-flows-surface h3,
+.nova-wallet-flows-surface [class*="text-[color:var(--nova-text)]"] {
+  color: #E3E0D7;
+}
+
+.nova-wallet-flows-surface [class*="text-[color:var(--nova-accent-soft)]"] {
+  color: #a39e8b;
+}
+
+.nova-wallet-flows-surface [class*="text-[color:var(--nova-text-soft)]"],
+.nova-wallet-flows-surface [class*="text-[color:var(--nova-text-muted)]"] {
+  color: rgba(227, 224, 215, 0.58);
+}
+
+.nova-insider-scan-surface .nova-card,
+.nova-insider-scan-surface .nova-card-strong,
+.nova-insider-scan-surface .nova-card-inner,
+.nova-insider-scan-surface .nova-panel,
+.nova-insider-scan-surface .nova-panel-strong,
+.nova-insider-scan-surface .nova-terminal-card {
+  background: rgba(8, 8, 10, 0.82) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 20px 60px rgba(0, 0, 0, 0.35) !important;
+  backdrop-filter: blur(18px) !important;
+  -webkit-backdrop-filter: blur(18px) !important;
+}
+
+.nova-insider-score {
+  color: #E3E0D7;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  text-shadow: 0 0 10px rgba(227, 224, 215, 0.08);
+}
+
+.nova-insider-scan-surface h1 {
+  color: #E3E0D7 !important;
+  text-shadow: 0 0 10px rgba(227, 224, 215, 0.05);
+}
+
+.nova-insider-scan-surface h1 .gradient-word {
+  background: none !important;
+  color: #b5b09d !important;
+  -webkit-text-fill-color: #b5b09d;
+  text-shadow: 0 0 10px rgba(227, 224, 215, 0.05);
+}
+
+.nova-insider-scan-surface .nova-insider-progress-track {
+  background: rgba(18, 18, 18, 0.9) !important;
+}
+
+.nova-insider-scan-surface .nova-insider-progress-fill {
+  background: linear-gradient(90deg, #b5b09d 0%, #a39e8b 50%, #8f8a78 100%) !important;
+  box-shadow: 0 0 10px rgba(163, 158, 139, 0.1) !important;
+}
+
+.nova-insider-scan-surface .nova-insider-row:hover {
+  background: rgba(105, 101, 90, 0.28) !important;
+  border-color: rgba(105, 101, 90, 0.32) !important;
+  color: #E3E0D7 !important;
+  box-shadow: none !important;
+}
+
+.nova-insider-scan-surface .nova-insider-risk-groups {
+  background: rgba(8, 8, 10, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 20px 60px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.nova-insider-scan-surface .nova-insider-risk-group-card {
+  background: rgba(5, 5, 6, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.nova-insider-scan-surface .nova-insider-risk-group-card:hover {
+  background: rgba(5, 5, 6, 0.88);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  filter: none;
+  opacity: 1;
+  transform: none;
+}
+
+.nova-insider-scan-surface button:hover,
+.nova-insider-scan-surface [role="button"]:hover {
+  background-color: rgba(105, 101, 90, 0.28) !important;
+  border-color: rgba(105, 101, 90, 0.32) !important;
+  color: #E3E0D7 !important;
+}
+
+.nova-insider-scan-surface h1,
+.nova-insider-scan-surface h2,
+.nova-insider-scan-surface h3,
+.nova-insider-scan-surface [class*="text-[color:var(--nova-text)]"] {
+  color: #E3E0D7;
+}
+
+.nova-insider-scan-surface [class*="text-[color:var(--nova-accent-soft)]"],
+.nova-insider-scan-surface [class*="text-[color:var(--nova-success)]"],
+.nova-insider-scan-surface [class*="text-[color:var(--nova-warning)]"] {
+  color: #a39e8b;
+}
+
+.nova-insider-scan-surface [class*="text-[color:var(--nova-text-soft)]"],
+.nova-insider-scan-surface [class*="text-[color:var(--nova-text-muted)]"] {
+  color: rgba(227, 224, 215, 0.58);
+}
+
+.nova-terminal-shell > .hidden.lg\:block .nova-card {
+  background: rgba(5, 6, 8, 0.88) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 18px 54px rgba(0, 0, 0, 0.32) !important;
+  backdrop-filter: blur(18px) !important;
+  -webkit-backdrop-filter: blur(18px) !important;
+}
+
+@media (max-width: 768px) {
+  .nova-landing .roadmap-card-stack {
+    gap: 1.5rem;
+  }
+
+  .nova-landing .roadmap-card-stack > * + * {
+    margin-top: 1.5rem;
+  }
+
+  .nova-landing .roadmap-card {
+    height: auto;
+    min-height: 0;
+  }
+
+  .nova-landing .roadmap-card-layout {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .nova-landing .roadmap-card-description {
+    width: 100%;
+    max-width: none;
+    overflow: visible;
+    text-overflow: unset;
+    white-space: normal;
+    word-break: normal;
+  }
+
+  .nova-insider-scan-surface .nova-insider-holder-table,
+  .nova-insider-scan-surface .nova-insider-holder-scroll,
+  .nova-insider-scan-surface .nova-insider-holder-detail,
+  .nova-insider-scan-surface .nova-insider-holder-detail > div {
+    box-sizing: border-box;
+    max-width: 100%;
+    width: 100%;
+    overflow-x: hidden;
+  }
+
+  .nova-insider-scan-surface .nova-insider-holder-table {
+    padding: 14px;
+  }
+
+  .nova-insider-scan-surface .nova-insider-holder-scroll {
+    overflow-x: hidden;
+  }
+
+  .nova-insider-scan-surface .nova-insider-holder-grid {
+    display: flex;
+    min-width: 0 !important;
+    max-width: 100%;
+    width: 100%;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .nova-insider-scan-surface .nova-insider-holder-scroll > .nova-insider-holder-grid:first-child {
+    display: none;
+  }
+
+  .nova-insider-scan-surface .nova-insider-row {
+    align-items: flex-start;
+    border-radius: 18px;
+    padding: 12px;
+  }
+
+  .nova-insider-scan-surface .nova-insider-row > * {
+    box-sizing: border-box;
+    max-width: 100%;
+    width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .nova-insider-scan-surface .nova-insider-holder-detail {
+    padding: 12px;
+  }
+
+  .nova-insider-scan-surface .nova-insider-holder-detail > div,
+  .nova-insider-scan-surface .nova-insider-holder-detail .grid,
+  .nova-insider-scan-surface .nova-insider-holder-detail [class*="rounded"] {
+    box-sizing: border-box;
+    max-width: 100%;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .nova-insider-scan-surface .nova-insider-wallet-address {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    word-break: break-all;
+  }
+}
+
+@media (min-width: 1280px) {
+  .nova-overview-first-screen {
+    --overview-main-height: clamp(500px, calc(100dvh - 345px), 620px);
+  }
+
+  .nova-overview-main-grid {
+    height: var(--overview-main-height);
+    min-height: 0;
+  }
+
+  .nova-overview-score-grid-wrap {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .nova-overview-chart-fill {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .nova-overview-chart-fill .nova-chart-card {
+    flex: 1 1 auto;
+    height: 100% !important;
+    min-height: 100% !important;
+  }
+
+  .nova-overview-main-grid .nova-overview-summary {
+    height: 100%;
+    min-height: 0 !important;
+  }
+
+  .nova-overview-main-grid .nova-overview-summary > div {
+    height: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-template-rows: repeat(3, minmax(0, 1fr)) !important;
+    grid-auto-rows: minmax(0, 1fr);
+  }
+
+  .nova-overview-main-grid .nova-overview-score-card {
+    min-height: 0 !important;
+  }
+
+  .nova-overview-main-grid .nova-score-core {
+    left: 3.7rem !important;
+    height: 4.65rem !important;
+    width: 4.65rem !important;
+  }
+
+  .nova-overview-main-grid .nova-score-label {
+    padding-left: 7rem !important;
+    padding-right: 0.5rem !important;
   }
 }

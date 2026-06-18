@@ -1,72 +1,243 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
+import ShaderLandingBackground from "@/components/ShaderLandingBackground";
 import Image from "next/image";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import type { ElementType, ReactNode } from "react";
+import { useEffect, useState } from "react";
 
 const analysisCards = [
   [
     "Holder Quality",
-    "Evaluates holder behavior and wallet quality signals from the available analysis depth.",
+    "Measures whether ownership is dominated by long-term conviction, experienced wallets, or short-term speculative activity.",
   ],
   [
     "Risk Pressure",
-    "Surfaces structural pressure such as weak-holder, concentration, and related risk inputs when available.",
+    "Identifies hidden structural weaknesses including concentrated ownership, distribution pressure, and fragile holder composition.",
   ],
   [
     "Liquidity Health",
-    "Looks at liquidity conditions as part of the conviction profile instead of reading price alone.",
+    "Evaluates whether liquidity conditions support sustainable participation or amplify future volatility and exit risk.",
   ],
   [
     "Smart Money Flow",
-    "Includes smart-money flow signals when the underlying evidence is available for the token.",
+    "Tracks the presence, activity, and conviction of wallets that historically demonstrate stronger market behavior.",
   ],
   [
     "Data Confidence",
-    "Shows how much trust to place in the output based on coverage and available inputs.",
+    "Shows how much evidence exists behind the analysis and how reliable the resulting conviction profile should be considered.",
   ],
 ];
 
 const depthModes = [
-  ["Fast", "Top holders are checked with a lighter research pass for quicker results."],
-  ["Balanced", "A wider holder sample is reviewed for stronger conviction context."],
-  ["Deep", "More holder behavior is evaluated for a deeper research profile."],
+  ["Fast", "Quickly evaluates the highest-impact holders to produce an immediate conviction snapshot."],
+  ["Balanced", "Expands coverage across a broader holder sample to improve behavioral accuracy and ownership context."],
+  ["Deep", "Performs the most extensive ownership investigation, uncovering deeper wallet patterns, structural risks, and conviction signals."],
 ];
 
 const problemPoints = [
-  "A token can look strong while weak holders dominate ownership.",
-  "Liquidity can look healthy while risk pressure is rising.",
-  "Top holders can decide structure before retail sees it.",
-  "Raw wallet data is noisy without interpretation.",
+  "A token can trend upward while weak holders, short-term wallets, or toxic ownership quietly dominate the supply.",
+  "Liquidity can look healthy on the chart, but holder behavior may show rising sell pressure, rotation, or exit risk.",
+  "Top holders often reveal the real structure first: accumulation, distribution, bundled wallets, whale pressure, and confidence quality.",
+  "Raw wallet data is noisy. NovaOS turns holder quality, risk pressure, and market health into a readable conviction profile.",
 ];
 
 const explainabilityItems = [
-  "Nova Conviction score",
-  "Holder quality breakdown",
-  "Risk drivers",
-  "Data confidence",
-  "Top holder contribution",
-  "Deep vs light analysis visibility",
+  "Conviction Drivers",
+  "Holder Quality Breakdown",
+  "Risk Contributors",
+  "Liquidity Context",
+  "Ownership Structure",
+  "Confidence & Coverage",
+];
+
+const roadmapItems = [
+  {
+    phase: "Phase 01",
+    label: "Today",
+    title: "Token Conviction Intelligence",
+    text: "Analyze holder quality, ownership structure, smart-money participation, liquidity health, and risk pressure behind any token.",
+  },
+  {
+    phase: "Phase 02",
+    label: "Next",
+    title: "Wallet Intelligence Layer",
+    text: "Build behavioral profiles for individual wallets, identifying conviction patterns, risk tendencies, accumulation behavior, and historical performance.",
+  },
+  {
+    phase: "Phase 03",
+    label: "Future",
+    title: "Capital Flow Mapping",
+    text: "Track how capital rotates between wallets, sectors, ecosystems, and narratives before it becomes visible on price charts.",
+  },
+  {
+    phase: "Phase 04",
+    label: "Expansion",
+    title: "Narrative Intelligence",
+    text: "Understand which stories, communities, and market themes are attracting conviction and driving ownership changes across the market.",
+  },
+  {
+    phase: "Phase 05",
+    label: "Vision",
+    title: "The Conviction Graph",
+    text: "A living intelligence network connecting tokens, wallets, narratives, and capital flows into a single explainable research layer.",
+  },
 ];
 
 const workflowSteps = [
-  ["Search Token", "Start with a token contract or pair and load the research context."],
-  ["Select Analysis Depth", "Choose Fast, Balanced, or Deep depending on how much holder behavior you want evaluated."],
-  ["Evaluate Holder Quality", "Review available holder and wallet-quality signals with structural risk context."],
-  ["Review Conviction Profile", "Leave with a readable thesis, risk drivers, and data confidence instead of raw noise."],
+  ["Select a Token", "Start with any token contract. NovaOS loads holder distribution, wallet activity, liquidity structure, and ownership signals."],
+  ["Map the Holder Base", "Analyze who owns the supply, how concentrated ownership is, and whether conviction comes from strong or weak hands."],
+  ["Trace Onchain Behavior", "Observe accumulation, distribution, wallet rotation, retention patterns, and smart-money participation across the holder base."],
+  ["Build the Thesis", "Combine structural signals into a conviction profile with explainable scores, risk drivers, and confidence context."],
 ];
 
-const heroWords = ["See", "Beyond", "The", "Chart"];
+const navItems = [
+  ["Problem", "problem"],
+  ["Process", "workflow"],
+  ["Signals", "signals"],
+  ["Depth", "depth"],
+  ["Explain", "explain"],
+  ["Roadmap", "roadmap"],
+  ["Pricing", "pricing"],
+] as const;
 
-const reveal = {
-  hidden: { opacity: 0, y: 24, filter: "blur(10px)" },
+type HeadingToken = {
+  text: string;
+  gradient?: boolean;
+};
+
+const heroWords: HeadingToken[] = [
+  { text: "See" },
+  { text: "Beyond" },
+  { text: "The" },
+  { text: "Chart", gradient: true },
+];
+
+const problemHeading: HeadingToken[] = [
+  { text: "Price" },
+  { text: "moves" },
+  { text: "fast." },
+  { text: "Conviction" },
+  { text: "explains" },
+  { text: "why.", gradient: true },
+];
+
+const workflowHeading: HeadingToken[] = [
+  { text: "From" },
+  { text: "a" },
+  { text: "token" },
+  { text: "address" },
+  { text: "to" },
+  { text: "a" },
+  { text: "conviction" },
+  { text: "thesis.", gradient: true },
+];
+
+const analysisHeading: HeadingToken[] = [
+  { text: "Ownership" },
+  { text: "reveals" },
+  { text: "what" },
+  { text: "price" },
+  { text: "cannot.", gradient: true },
+];
+
+const depthHeading: HeadingToken[] = [
+  { text: "Choose" },
+  { text: "how" },
+  { text: "deeply" },
+  { text: "NovaOS" },
+  { text: "investigates" },
+  { text: "ownership.", gradient: true },
+];
+
+const explainabilityHeading: HeadingToken[] = [
+  { text: "Every" },
+  { text: "conviction" },
+  { text: "score" },
+  { text: "is" },
+  { text: "traceable.", gradient: true },
+];
+
+const roadmapHeading: HeadingToken[] = [
+  { text: "Building" },
+  { text: "the" },
+  { text: "operating" },
+  { text: "system" },
+  { text: "for" },
+  { text: "onchain" },
+  { text: "conviction.", gradient: true },
+];
+
+const pricingHeading: HeadingToken[] = [
+  { text: "Pricing" },
+  { text: "during" },
+  { text: "demo" },
+  { text: "access", gradient: true },
+];
+
+const finalHeading: HeadingToken[] = [
+  { text: "See" },
+  { text: "what" },
+  { text: "the" },
+  { text: "chart" },
+  { text: "cannot" },
+  { text: "show.", gradient: true },
+];
+
+const sectionTitleReveal = {
+  hidden: { opacity: 0, y: 42, scale: 0.96, filter: "blur(18px)" },
+  visible: { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" },
+};
+
+const sectionTextReveal = {
+  hidden: { opacity: 0, y: 22, filter: "blur(12px)" },
   visible: { opacity: 1, y: 0, filter: "blur(0px)" },
 };
 
+const sectionCardReveal = {
+  hidden: { opacity: 0, y: 44, scale: 0.96, filter: "blur(18px)" },
+  visible: { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" },
+};
+
 const heroWordReveal = {
+  hidden: { opacity: 0, y: 42, scale: 0.96, filter: "blur(18px)" },
+  visible: { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" },
+};
+
+const heroIconReveal = {
+  hidden: { opacity: 0, scale: 0.92, filter: "blur(14px)" },
+  visible: { opacity: 1, scale: 1, filter: "blur(0px)" },
+};
+
+const heroEyebrowReveal = {
   hidden: { opacity: 0, y: 18, filter: "blur(12px)" },
   visible: { opacity: 1, y: 0, filter: "blur(0px)" },
+};
+
+const heroSubtitleReveal = {
+  hidden: { opacity: 0, y: 22, filter: "blur(14px)" },
+  visible: { opacity: 1, y: 0, filter: "blur(0px)" },
+};
+
+const heroButtonsReveal = {
+  hidden: { opacity: 0, y: 18, scale: 0.96, filter: "blur(10px)" },
+  visible: { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" },
+};
+
+const heroDisclaimerReveal = {
+  hidden: { opacity: 0, y: 12, filter: "blur(8px)" },
+  visible: { opacity: 1, y: 0, filter: "blur(0px)" },
+};
+
+const heroHeadingContainer = {
+  hidden: {},
+  visible: {
+    transition: {
+      staggerChildren: 0.14,
+      delayChildren: 0.72,
+    },
+  },
 };
 
 const staggerContainer = {
@@ -77,6 +248,18 @@ const staggerContainer = {
     },
   },
 };
+
+const sectionCardContainer = {
+  hidden: {},
+  visible: {
+    transition: {
+      delayChildren: 0.55,
+      staggerChildren: 0.18,
+    },
+  },
+};
+
+const premiumCardClass = "nova-landing-glass-card";
 
 function smoothScrollTo(id: string) {
   const target = document.getElementById(id);
@@ -103,56 +286,285 @@ function smoothScrollTo(id: string) {
   requestAnimationFrame(step);
 }
 
-export default function Home() {
+function CinematicHeading({
+  as = "h2",
+  className,
+  tokens,
+}: {
+  as?: "h1" | "h2";
+  className: string;
+  tokens: HeadingToken[];
+}) {
+  const shouldReduceMotion = useReducedMotion();
+  const HeadingTag = (as === "h1" ? motion.h1 : motion.h2) as ElementType;
+  const containerVariants = as === "h1" ? heroHeadingContainer : {
+    hidden: {},
+    visible: {
+      transition: {
+        staggerChildren: 0.14,
+      },
+    },
+  };
+
+  if (shouldReduceMotion) {
+    const StaticTag = as;
+
+    return (
+      <StaticTag className={className}>
+        {tokens.map((token, index) => (
+          <span
+            key={`${token.text}-${index}`}
+            className={`mr-[0.16em] inline-block last:mr-0 ${token.gradient ? "gradient-word" : ""}`}
+          >
+            {token.text}
+          </span>
+        ))}
+      </StaticTag>
+    );
+  }
+
   return (
-    <main className="nova-landing min-h-screen bg-[var(--nova-bg)] text-[color:var(--nova-text)]">
-      <header className="sticky top-0 z-50 border-b border-[color:var(--nova-border-soft)] bg-[rgba(10,10,10,0.86)] backdrop-blur-2xl">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5">
+    <HeadingTag variants={containerVariants} className={className}>
+      {tokens.map((token, index) => (
+        <motion.span
+          key={`${token.text}-${index}`}
+          variants={as === "h1" ? heroWordReveal : sectionTitleReveal}
+          transition={{ duration: 1.05, ease: [0.16, 1, 0.3, 1] }}
+          className={`mr-[0.16em] inline-block last:mr-0 ${token.gradient ? "gradient-word" : ""}`}
+        >
+          {token.text}
+        </motion.span>
+      ))}
+    </HeadingTag>
+  );
+}
+
+function CinematicDescription({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className: string;
+}) {
+  const shouldReduceMotion = useReducedMotion();
+
+  if (shouldReduceMotion) {
+    return <p className={className}>{children}</p>;
+  }
+
+  return (
+    <motion.p
+      variants={sectionTextReveal}
+      transition={{ duration: 0.85, delay: 0.35, ease: [0.16, 1, 0.3, 1] }}
+      className={className}
+    >
+      {children}
+    </motion.p>
+  );
+}
+
+function CinematicCard({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className: string;
+}) {
+  const shouldReduceMotion = useReducedMotion();
+
+  if (shouldReduceMotion) {
+    return <div className={className}>{children}</div>;
+  }
+
+  return (
+    <motion.div
+      variants={sectionCardReveal}
+      transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
+      className={className}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+function CardTitleReveal({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className: string;
+}) {
+  const shouldReduceMotion = useReducedMotion();
+
+  if (shouldReduceMotion) {
+    return <p className={className}>{children}</p>;
+  }
+
+  return (
+    <motion.p
+      variants={{
+        hidden: { opacity: 0, y: 8, filter: "blur(6px)" },
+        visible: { opacity: 1, y: 0, filter: "blur(0px)" },
+      }}
+      transition={{ duration: 0.55, delay: 0.42, ease: [0.16, 1, 0.3, 1] }}
+      className={className}
+    >
+      {children}
+    </motion.p>
+  );
+}
+
+function TypewriterReveal({
+  className,
+  delay = 0.68,
+  text,
+}: {
+  className: string;
+  delay?: number;
+  text: string;
+}) {
+  const shouldReduceMotion = useReducedMotion();
+
+  if (shouldReduceMotion) {
+    return <p className={className}>{text}</p>;
+  }
+
+  return (
+    <motion.p
+      className={className}
+      variants={{
+        hidden: {},
+        visible: {
+          transition: {
+            delayChildren: delay,
+            staggerChildren: 0.045,
+          },
+        },
+      }}
+    >
+      {text.split(/(\s+)/).map((part, index) => {
+        if (/^\s+$/.test(part)) {
+          return part;
+        }
+
+        return (
+          <motion.span
+            key={`${part}-${index}`}
+            variants={{
+              hidden: { opacity: 0, filter: "blur(4px)" },
+              visible: { opacity: 1, filter: "blur(0px)" },
+            }}
+            transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+            className="inline-block"
+          >
+            {part}
+          </motion.span>
+        );
+      })}
+    </motion.p>
+  );
+}
+
+export default function Home() {
+  const [activeSection, setActiveSection] = useState<(typeof navItems)[number][1] | null>(null);
+
+  useEffect(() => {
+    function updateActiveSection() {
+      const offset = 180;
+      const problemSection = document.getElementById("problem");
+
+      if (!problemSection || problemSection.getBoundingClientRect().top > offset) {
+        setActiveSection(null);
+        return;
+      }
+
+      const current = navItems.reduce<(typeof navItems)[number][1] | null>((active, [, id]) => {
+        const section = document.getElementById(id);
+        if (!section) return active;
+        return section.getBoundingClientRect().top <= offset ? id : active;
+      }, null);
+
+      setActiveSection(current);
+    }
+
+    updateActiveSection();
+    window.addEventListener("scroll", updateActiveSection, { passive: true });
+    window.addEventListener("resize", updateActiveSection);
+
+    return () => {
+      window.removeEventListener("scroll", updateActiveSection);
+      window.removeEventListener("resize", updateActiveSection);
+    };
+  }, []);
+
+  return (
+    <>
+      <header className="fixed left-1/2 top-3 z-[9999] w-[calc(100%-24px)] max-w-[1440px] -translate-x-1/2 rounded-[24px] border border-white/10 bg-[#0a0c0d]/[0.48] px-4 py-3 font-[family:var(--font-geist-sans)] shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_24px_90px_rgba(0,0,0,0.42)] backdrop-blur-[26px] md:top-6 md:w-[calc(100%-64px)] md:rounded-[30px] md:px-7 md:py-4">
+        <div className="flex h-10 items-center justify-between">
           <Link href="/" className="flex items-center gap-3">
             <Image
               src="/novaicon.png"
               alt="NovaOS"
-              width={32}
-              height={32}
+              width={20}
+              height={20}
               unoptimized
-              className="h-8 w-8 object-contain"
+              className="h-5 w-5 object-contain"
             />
-            <span className="text-sm font-semibold tracking-[-0.02em]">
+            <span className="text-sm font-semibold tracking-[-0.02em] text-white/90 md:text-[15px] md:font-bold">
               NovaOS
             </span>
           </Link>
-          <nav className="hidden items-center gap-7 text-xs text-[color:var(--nova-text-muted)] md:flex">
-            <a href="#how" onClick={(event) => { event.preventDefault(); smoothScrollTo("how"); }} className="transition hover:text-[color:var(--nova-text)]">
-              How it works
-            </a>
-            <a href="#depth" onClick={(event) => { event.preventDefault(); smoothScrollTo("depth"); }} className="transition hover:text-[color:var(--nova-text)]">
-              Depth
-            </a>
-            <a href="#terminal" onClick={(event) => { event.preventDefault(); smoothScrollTo("terminal"); }} className="transition hover:text-[color:var(--nova-text)]">
-              Terminal
-            </a>
+          <nav className="hidden items-center gap-5 lg:gap-7 md:flex">
+            {navItems.map(([label, id]) => {
+              const isActive = activeSection === id;
+
+              return (
+                <a
+                  key={id}
+                  href={`#${id}`}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    smoothScrollTo(id);
+                    setActiveSection(id);
+                  }}
+                  className={`group relative text-xs font-medium transition-all duration-300 ease-out hover:-translate-y-0.5 hover:text-white/90 lg:text-sm ${
+                    isActive
+                      ? "text-[#b5b09d] drop-shadow-[0_0_12px_rgba(181,176,157,0.14)]"
+                      : "text-white/52"
+                  }`}
+                >
+                  {label}
+                  <span
+                    className={`absolute -bottom-2 left-1/2 h-px -translate-x-1/2 bg-[#b5b09d] transition-all duration-300 ${
+                      isActive ? "w-full" : "w-0 group-hover:w-full"
+                    }`}
+                  />
+                </a>
+              );
+            })}
           </nav>
           <Link
             href="/terminal"
-            className="nova-button rounded-full px-4 py-2 text-xs font-medium transition"
+            className="inline-flex items-center justify-center rounded-full border border-white/15 bg-white/[0.045] px-6 py-3 text-xs font-bold uppercase tracking-[0.08em] text-[#E3E0D7] shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_12px_40px_rgba(0,0,0,0.28)] backdrop-blur-[28px] transition-all duration-500 ease-out hover:-translate-y-0.5 hover:scale-[1.02] hover:border-[#B5B09F]/40 hover:bg-[#B5B09F]/[0.045] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_0_24px_rgba(181,176,159,0.14),0_0_60px_rgba(181,176,159,0.06)]"
           >
-            Open Terminal
+            ANALYZE
           </Link>
         </div>
       </header>
 
-      <section className="relative overflow-hidden px-5 pb-32 pt-28 md:pb-44 md:pt-44">
+      <main className="nova-landing relative isolate min-h-screen overflow-hidden text-[color:var(--nova-text)]">
+      <ShaderLandingBackground />
+      <section className="relative flex min-h-screen items-center overflow-hidden px-5 pb-28 pt-32 md:pb-36 md:pt-36">
         <div className="pointer-events-none absolute left-1/2 top-24 h-80 w-80 -translate-x-1/2 rounded-full bg-[rgba(83,104,120,0.08)] blur-[120px]" />
         <motion.div
           initial="hidden"
           animate="visible"
-          variants={staggerContainer}
-          className="relative mx-auto flex max-w-5xl flex-col items-center text-center"
+          className="relative isolate mx-auto flex max-w-6xl flex-col items-center text-center"
         >
             <motion.div
-              variants={reveal}
-              transition={{ duration: 1.15, ease: [0.16, 1, 0.3, 1] }}
-              className="mb-12 h-32 w-32 object-contain md:mb-14 md:h-36 md:w-36"
+              variants={heroIconReveal}
+              transition={{ duration: 1, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
+              className="mb-14 h-44 w-44 object-contain md:mb-16 md:h-52 md:w-52"
             >
               <Image
                 src="/novaicon.png"
@@ -164,181 +576,268 @@ export default function Home() {
                 className="h-full w-full object-contain"
               />
             </motion.div>
-            <motion.p variants={reveal} transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }} className="nova-tech mb-5 text-xs text-[color:var(--nova-accent-soft)]">
+            <motion.p variants={heroEyebrowReveal} transition={{ duration: 0.85, delay: 0.45, ease: [0.16, 1, 0.3, 1] }} className="nova-tech mb-7 text-[11px] font-medium text-white/45 md:text-xs">
               AI-native onchain conviction intelligence
             </motion.p>
-            <motion.h1
-              variants={staggerContainer}
-              transition={{ staggerChildren: 0.16, delayChildren: 0.16 }}
-              className="nova-display nova-hero-title max-w-5xl text-5xl leading-[0.98] text-[color:var(--nova-text)] md:text-7xl lg:text-8xl"
-            >
-              {heroWords.map((word) => (
-                <motion.span
-                  key={word}
-                  variants={heroWordReveal}
-                  transition={{ duration: 1.05, ease: [0.16, 1, 0.3, 1] }}
-                  className={`mr-[0.22em] inline-block last:mr-0 ${word === "Chart" ? "gradient-word" : ""}`}
-                >
-                  {word}
-                </motion.span>
-              ))}
-            </motion.h1>
-            <motion.p variants={reveal} transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }} className="nova-copy mt-7 max-w-2xl text-base leading-7 text-[color:var(--nova-text-soft)] md:text-lg">
+            <CinematicHeading
+              as="h1"
+              tokens={heroWords}
+              className="nova-display nova-hero-title max-w-6xl text-[3.05rem] font-black leading-[0.94] tracking-[-0.032em] text-[#E3E0D7] md:text-[4.85rem] md:leading-[0.94] lg:text-[5.95rem]"
+            />
+            <motion.p variants={heroSubtitleReveal} transition={{ duration: 0.85, delay: 1.62, ease: [0.16, 1, 0.3, 1] }} className="nova-tech mt-9 max-w-3xl text-[10px] font-medium leading-7 text-white/45 md:text-xs">
               NovaOS turns token holder behavior, wallet quality, liquidity
               conditions, and structural risk into a readable conviction profile.
             </motion.p>
-            <motion.div variants={reveal} transition={{ duration: 0.95, ease: [0.16, 1, 0.3, 1] }} className="mt-9 flex flex-col gap-3 sm:flex-row">
+            <motion.div variants={heroButtonsReveal} transition={{ duration: 0.8, delay: 1.86, ease: [0.16, 1, 0.3, 1] }} className="mt-11 flex justify-center">
               <Link
                 href="/terminal"
-                className="nova-button rounded-full px-6 py-3 text-sm font-semibold transition"
+                className="nova-landing-button nova-landing-button-cta rounded-full px-9 py-3.5 text-xs font-bold md:px-10 md:py-4"
               >
-                Open Intelligence Terminal
+                START YOUR ANALYSIS
               </Link>
-              <a
-                href="#how"
-                onClick={(event) => { event.preventDefault(); smoothScrollTo("how"); }}
-                className="rounded-full nova-card-inner px-6 py-3 text-sm font-semibold text-[color:var(--nova-text-soft)] transition hover:text-[color:var(--nova-text)]"
-              >
-                How It Works
-              </a>
             </motion.div>
-            <motion.p variants={reveal} transition={{ duration: 0.85, ease: [0.16, 1, 0.3, 1] }} className="nova-tech mt-5 text-[10px] text-[color:var(--nova-text-faint)]">
+            <motion.p variants={heroDisclaimerReveal} transition={{ duration: 0.7, delay: 2.08, ease: [0.16, 1, 0.3, 1] }} className="nova-tech mt-6 text-[10px] text-white/35">
               Built for token research. Not financial advice.
             </motion.p>
         </motion.div>
       </section>
 
-      <section id="how" className="px-5 py-28 md:py-36">
-        <RevealSection className="mx-auto max-w-7xl">
-          <div className="grid gap-8 lg:grid-cols-[0.88fr_1.12fr]">
-            <div>
-              <p className="nova-tech mb-4 text-xs text-[color:var(--nova-accent-soft)]">
-                The Problem
-              </p>
-              <h2 className="nova-display nova-section-title text-4xl leading-tight md:text-6xl">
-                Charts show price. They don&apos;t explain{" "}
-                <span className="gradient-word">conviction.</span>
-              </h2>
-            </div>
-            <motion.div variants={staggerContainer} className="grid gap-3 sm:grid-cols-2">
+      <section id="problem" className="flex min-h-screen items-center px-5 py-32 md:py-40 lg:py-48">
+        <RevealSection className="mx-auto w-full max-w-7xl">
+          <motion.div variants={staggerContainer} className="grid gap-12 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
+            <motion.div variants={{ hidden: {}, visible: {} }}>
+              <CinematicHeading
+                tokens={problemHeading}
+                className="nova-display nova-section-title max-w-4xl text-[2.46rem] leading-[0.94] tracking-[-0.032em] text-[#E3E0D7] md:text-[3.7rem] lg:text-[4.45rem]"
+              />
+            </motion.div>
+            <motion.div variants={sectionCardContainer} className="grid gap-6 sm:grid-cols-2">
               {problemPoints.map((point) => (
-                <motion.div variants={reveal} key={point} className="rounded-[1.5rem] nova-card p-5">
-                  <p className="nova-copy text-sm leading-6 text-[color:var(--nova-text-soft)]">
-                    {point}
-                  </p>
-                </motion.div>
+                <CinematicCard key={point} className={premiumCardClass}>
+                  <TypewriterReveal
+                    delay={0.5}
+                    text={point}
+                    className="nova-copy text-base font-normal leading-[1.9] text-white/72"
+                  />
+                </CinematicCard>
               ))}
             </motion.div>
-          </div>
+          </motion.div>
+        </RevealSection>
+      </section>
 
-          <div className="mt-28 md:mt-36">
-            <p className="nova-tech mb-4 text-xs text-[color:var(--nova-accent-soft)]">
-              Workflow
-            </p>
-            <h2 className="nova-display nova-section-title max-w-3xl text-4xl leading-tight md:text-6xl">
-              How NovaOS <span className="gradient-word">Works</span>
-            </h2>
-            <p className="nova-copy mt-5 max-w-2xl text-sm leading-7 text-[color:var(--nova-text-soft)] md:text-base">
-              Start with a token, choose an analysis depth, and review a
-              conviction profile built from available onchain signals.
-            </p>
-            <motion.div variants={staggerContainer} className="mt-14 grid gap-4 md:grid-cols-4">
+      <section id="workflow" className="px-5 py-40 md:py-48 lg:py-56">
+        <RevealSection className="mx-auto max-w-7xl">
+          <div>
+            <SectionIntro
+              eyebrow="Workflow"
+              titleTokens={workflowHeading}
+              text="NovaOS transforms fragmented wallet activity, holder behavior, liquidity structure, and smart-money signals into a readable conviction profile."
+            />
+            <motion.div variants={sectionCardContainer} className="mt-16 grid gap-5 md:grid-cols-4">
               {workflowSteps.map(([title, text], index) => (
-                <motion.div variants={reveal} key={title} className="rounded-[1.5rem] nova-card p-5">
-                  <span className="text-xs text-[color:var(--nova-text-faint)]">
+                <CinematicCard key={title} className={premiumCardClass}>
+                  <span className="text-xs font-medium text-white/35">
                     0{index + 1}
                   </span>
-                  <p className="nova-tech mt-5 text-xs text-[color:var(--nova-text)]">
+                  <CardTitleReveal className="nova-tech mt-6 text-sm font-semibold tracking-[0.18em] text-white/82">
                     {title}
-                  </p>
-                  <p className="nova-copy mt-3 text-sm leading-6 text-[color:var(--nova-text-muted)]">
-                    {text}
-                  </p>
-                </motion.div>
+                  </CardTitleReveal>
+                  <TypewriterReveal
+                    text={text}
+                    className="nova-copy mt-4 text-base leading-relaxed text-white/52"
+                  />
+                </CinematicCard>
               ))}
             </motion.div>
           </div>
         </RevealSection>
       </section>
 
-      <section className="px-5 py-28 md:py-36">
+      <section id="signals" className="px-5 py-40 md:py-48 lg:py-56">
         <RevealSection className="mx-auto max-w-7xl">
           <SectionIntro
-            eyebrow="What NovaOS analyzes"
-            title={<>A conviction profile from multiple onchain <span className="gradient-word">signals.</span></>}
-            text="NovaOS combines available holder, wallet, liquidity, flow, and confidence inputs into a readable research surface."
+            eyebrow="What NovaOS Analyzes"
+            titleTokens={analysisHeading}
+            text="NovaOS focuses on the behavior behind the chart: who owns the supply, how they behave, and whether conviction is strengthening or deteriorating."
           />
-          <motion.div variants={staggerContainer} className="mt-14 grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+          <motion.div variants={sectionCardContainer} className="mt-16 grid gap-5 md:grid-cols-2 lg:grid-cols-5">
             {analysisCards.map(([title, text]) => (
-              <motion.div variants={reveal} key={title} className="rounded-[1.5rem] nova-card p-5">
-                <p className="nova-tech text-xs text-[color:var(--nova-text)]">
+              <CinematicCard key={title} className={premiumCardClass}>
+                <CardTitleReveal className="nova-tech text-sm font-semibold tracking-[0.18em] text-white/82">
                   {title}
-                </p>
-                <p className="nova-copy mt-4 text-sm leading-6 text-[color:var(--nova-text-muted)]">
-                  {text}
-                </p>
-              </motion.div>
+                </CardTitleReveal>
+                <TypewriterReveal
+                  text={text}
+                  className="nova-copy mt-5 text-base leading-relaxed text-white/52"
+                />
+              </CinematicCard>
             ))}
           </motion.div>
         </RevealSection>
       </section>
 
-      <section id="depth" className="px-5 py-28 md:py-36">
+      <section id="depth" className="px-5 py-40 md:py-48 lg:py-56">
         <RevealSection className="mx-auto max-w-7xl">
           <SectionIntro
             eyebrow="Analysis Depth"
-            title={<>Choose how much holder behavior NovaOS <span className="gradient-word">evaluates.</span></>}
-            text="Deeper modes take longer because more holder behavior is evaluated."
+            titleTokens={depthHeading}
+            text="Different research depths examine different amounts of holder behavior, wallet history, and conviction evidence."
           />
-          <motion.div variants={staggerContainer} className="mt-14 grid gap-4 md:grid-cols-3">
+          <motion.div variants={sectionCardContainer} className="mt-16 grid gap-5 md:grid-cols-3">
             {depthModes.map(([mode, detail]) => (
-              <motion.div variants={reveal} key={mode} className="rounded-[1.75rem] nova-card-strong p-6">
-                <p className="nova-tech text-xs text-[color:var(--nova-accent-soft)]">
+              <CinematicCard key={mode} className={`${premiumCardClass} p-7`}>
+                <CardTitleReveal className="nova-tech text-sm font-semibold tracking-[0.18em] text-white/82">
                   {mode}
-                </p>
-                <p className="nova-copy mt-5 text-lg leading-7 text-[color:var(--nova-text-soft)]">
-                  {detail}
-                </p>
-              </motion.div>
+                </CardTitleReveal>
+                <TypewriterReveal
+                  text={detail}
+                  className="nova-copy mt-6 text-lg leading-relaxed text-white/52"
+                />
+              </CinematicCard>
             ))}
           </motion.div>
         </RevealSection>
       </section>
 
-      <section className="px-5 py-28 md:py-36">
-        <RevealSection className="mx-auto grid max-w-7xl gap-14 lg:grid-cols-[1fr_1fr]">
+      <section id="explain" className="px-5 py-40 md:py-48 lg:py-56">
+        <RevealSection className="mx-auto grid max-w-7xl gap-16 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
           <div>
-            <p className="nova-tech mb-4 text-xs text-[color:var(--nova-accent-soft)]">
-              Explainability
-            </p>
-            <h2 className="nova-display nova-section-title text-4xl md:text-6xl">
-              Every score needs a <span className="gradient-word">reason.</span>
-            </h2>
+            <SectionIntro
+              eyebrow="Explainability"
+              titleTokens={explainabilityHeading}
+              text="NovaOS does not generate black-box ratings. Every score is connected to observable ownership behavior and structural evidence."
+            />
           </div>
-          <div className="rounded-[2rem] nova-card p-6">
-            <div className="grid gap-3 sm:grid-cols-2">
+          <motion.div variants={sectionCardContainer} className="grid gap-4 sm:grid-cols-2">
               {explainabilityItems.map((item) => (
-                <div key={item} className="rounded-[1.2rem] nova-card-inner px-4 py-3">
-                  <p className="nova-copy text-sm text-[color:var(--nova-text-soft)]">
-                    {item}
-                  </p>
-                </div>
+                <CinematicCard key={item} className={`${premiumCardClass} px-5 py-4`}>
+                  <TypewriterReveal
+                    delay={0.48}
+                    text={item}
+                    className="nova-copy text-base font-medium text-white/62"
+                  />
+                </CinematicCard>
               ))}
-            </div>
-          </div>
+          </motion.div>
         </RevealSection>
       </section>
 
-      <section id="terminal" className="px-5 py-32 md:py-44">
+      <section id="roadmap" className="px-5 py-40 md:py-48 lg:py-56">
+        <RevealSection className="mx-auto max-w-7xl">
+          <SectionIntro
+            eyebrow="Roadmap"
+            titleTokens={roadmapHeading}
+            text="NovaOS starts with token intelligence. The long-term vision is a complete intelligence layer that explains how capital, wallets, and narratives move across crypto markets."
+          />
+
+          <motion.div
+            variants={{
+              hidden: {},
+              visible: {
+                transition: {
+                  delayChildren: 0.55,
+                  staggerChildren: 0.12,
+                },
+              },
+            }}
+            className="relative left-1/2 mt-16 w-[min(92vw,1500px)] -translate-x-1/2"
+          >
+            <div className="roadmap-card-stack relative z-10 space-y-10">
+              {roadmapItems.map((item) => (
+                <CinematicCard key={item.phase} className={`${premiumCardClass} roadmap-card px-6 py-6 md:px-8 md:py-7`}>
+                  <div className="roadmap-card-layout grid gap-5 xl:grid-cols-[minmax(320px,0.28fr)_minmax(0,0.72fr)] xl:items-center xl:gap-8">
+                    <div className="min-w-0">
+                      <span className="nova-tech block whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.22em] text-[#a39e8b]">
+                        {item.label}
+                      </span>
+                      <CardTitleReveal className="nova-copy mt-3 whitespace-nowrap text-xl font-semibold tracking-[-0.035em] text-white/88 md:text-2xl">
+                          {item.title}
+                      </CardTitleReveal>
+                    </div>
+                    <TypewriterReveal
+                      delay={0.48}
+                      text={item.text}
+                      className="nova-copy roadmap-card-description min-w-0 whitespace-nowrap text-[0.86rem] leading-relaxed text-white/52 min-[1500px]:text-[0.95rem] xl:text-left"
+                    />
+                  </div>
+                </CinematicCard>
+              ))}
+            </div>
+          </motion.div>
+        </RevealSection>
+      </section>
+
+      <section id="pricing" className="px-5 py-40 md:py-48 lg:py-56">
+        <RevealSection className="mx-auto max-w-7xl">
+          <SectionIntro
+            eyebrow="Early Access"
+            titleTokens={pricingHeading}
+            text="NovaOS is currently available in demo mode while the intelligence engine continues to evolve. During this phase, every feature is accessible at no cost."
+          />
+
+          <motion.div variants={sectionCardContainer} className="mx-auto mt-16 max-w-4xl">
+            <CinematicCard className={`${premiumCardClass} p-8 md:p-10`}>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <CardTitleReveal className="nova-tech text-xs font-semibold uppercase tracking-[0.22em] text-[#a39e8b]">
+                    Demo Pricing
+                  </CardTitleReveal>
+                  <p className="nova-copy mt-3 max-w-xl text-sm leading-relaxed text-white/52">
+                    Complete platform access while NovaOS is in demo availability.
+                  </p>
+                </div>
+                <span className="nova-tech rounded-full border border-white/12 bg-white/[0.045] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[#a39e8b]">
+                  DEMO ACCESS
+                </span>
+              </div>
+
+              <div className="mt-10 text-center">
+                <div className="relative mx-auto inline-flex px-3 text-4xl font-semibold tracking-[-0.05em] text-white/42">
+                  $25/mo
+                  <span className="absolute left-0 top-1/2 h-px w-full -translate-y-1/2 bg-[#b5b09d]/70" />
+                </div>
+                <div className="nova-display mt-2 bg-gradient-to-r from-[#E3E0D7] via-[#b5b09d] to-[#a39e8b] bg-clip-text text-[5.6rem] font-black leading-[0.9] tracking-[-0.04em] text-transparent md:text-[7rem]">
+                  FREE
+                </div>
+              </div>
+
+              <div className="mt-10 grid gap-3 sm:grid-cols-2">
+                {[
+                  "Full Conviction Engine Access",
+                  "Wallet Intelligence Access",
+                  "Insider Scan Access",
+                  "AI vs Human Arena Access",
+                ].map((feature) => (
+                  <div key={feature} className="nova-copy flex items-center gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] px-4 py-3 text-sm font-medium text-white/64">
+                    <span className="text-[#a39e8b]">✓</span>
+                    <span>{feature}</span>
+                  </div>
+                ))}
+              </div>
+
+              <p className="nova-copy mt-8 text-center text-xs leading-relaxed text-white/42">
+                All NovaOS features are currently available for free during the demo phase. Future pricing may be introduced as additional intelligence layers and infrastructure are deployed.
+              </p>
+            </CinematicCard>
+          </motion.div>
+        </RevealSection>
+      </section>
+
+      <section id="terminal" className="px-5 py-44 md:py-52 lg:py-64">
         <RevealSection className="mx-auto max-w-5xl text-center">
-          <h2 className="nova-display nova-section-title text-4xl md:text-6xl">
-            Start with a token. Leave with a <span className="gradient-word">thesis.</span>
-          </h2>
+          <CinematicHeading
+            tokens={finalHeading}
+            className="nova-display nova-section-title text-[2.46rem] font-black leading-[0.94] tracking-[-0.032em] text-[#E3E0D7] md:text-[3.7rem] lg:text-[4.45rem]"
+          />
+          <CinematicDescription className="nova-copy mx-auto mt-6 max-w-[720px] text-base leading-relaxed text-white/55">
+            Start with a token and leave with a readable conviction thesis.
+          </CinematicDescription>
           <Link
             href="/terminal"
-            className="nova-button mt-8 inline-flex rounded-full px-7 py-3 text-sm font-semibold transition"
+            className="nova-landing-button nova-landing-button-cta mt-10 inline-flex rounded-full px-9 py-3.5 text-xs font-bold md:px-10 md:py-4"
           >
-            Launch Terminal
+            LAUNCH TERMINAL
           </Link>
         </RevealSection>
       </section>
@@ -351,6 +850,7 @@ export default function Home() {
         </div>
       </footer>
     </main>
+    </>
   );
 }
 
@@ -365,9 +865,8 @@ function RevealSection({
     <motion.div
       initial="hidden"
       whileInView="visible"
-      viewport={{ once: true, margin: "-120px" }}
-      variants={reveal}
-      transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
+      viewport={{ once: true, amount: 0.35 }}
+      variants={{ hidden: {}, visible: {} }}
       className={className}
     >
       {children}
@@ -376,25 +875,22 @@ function RevealSection({
 }
 
 function SectionIntro({
-  eyebrow,
   text,
-  title,
+  titleTokens,
 }: {
   eyebrow: string;
   text: string;
-  title: ReactNode;
+  titleTokens: HeadingToken[];
 }) {
   return (
     <div>
-      <p className="nova-tech mb-4 text-xs text-[color:var(--nova-accent-soft)]">
-        {eyebrow}
-      </p>
-      <h2 className="nova-display nova-section-title max-w-3xl text-4xl leading-tight md:text-6xl">
-        {title}
-      </h2>
-      <p className="nova-copy mt-5 max-w-2xl text-sm leading-7 text-[color:var(--nova-text-soft)] md:text-base">
+      <CinematicHeading
+        tokens={titleTokens}
+        className="nova-display nova-section-title max-w-4xl text-[2.46rem] font-black leading-[0.94] tracking-[-0.032em] text-[#E3E0D7] md:text-[3.7rem] lg:text-[4.45rem]"
+      />
+      <CinematicDescription className="nova-copy mt-6 max-w-[720px] text-base leading-relaxed text-white/55">
         {text}
-      </p>
+      </CinematicDescription>
     </div>
   );
 }
